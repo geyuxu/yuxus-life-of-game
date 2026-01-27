@@ -153,6 +153,10 @@ def add_new_species(parent_id: int) -> int:
     for sp_id in range(new_id):
         SPECIES_CONFIG[sp_id]['prey'].append(new_id)
 
+    # Rebuild GPU tensors
+    global SPECIES_TENSORS
+    SPECIES_TENSORS = build_species_tensors()
+
     return new_id
 
 
@@ -160,6 +164,50 @@ def add_new_species(parent_id: int) -> int:
 for i in range(INITIAL_NUM_SPECIES):
     SPECIES_CONFIG.append(create_species_config(i, INITIAL_NUM_SPECIES, name=f'S{i}'))
     SPECIES_CHILD_COUNT[i] = 0
+
+
+def build_species_tensors():
+    """Build GPU tensors for species parameters (called when species change)."""
+    num_sp = len(SPECIES_CONFIG)
+
+    # Parameter lookup tensors [MAX_SPECIES]
+    metabolism = torch.zeros(MAX_SPECIES, dtype=torch.float32, device=DEVICE)
+    repro_threshold = torch.zeros(MAX_SPECIES, dtype=torch.float32, device=DEVICE)
+    repro_cost = torch.zeros(MAX_SPECIES, dtype=torch.float32, device=DEVICE)
+    offspring_energy = torch.zeros(MAX_SPECIES, dtype=torch.float32, device=DEVICE)
+    starvation = torch.zeros(MAX_SPECIES, dtype=torch.float32, device=DEVICE)
+    hidden_sizes = torch.zeros(MAX_SPECIES, dtype=torch.int32, device=DEVICE)
+
+    for sp_id in range(num_sp):
+        sp = SPECIES_CONFIG[sp_id]
+        metabolism[sp_id] = sp['metabolism']
+        repro_threshold[sp_id] = sp['repro_threshold']
+        repro_cost[sp_id] = sp['repro_cost']
+        offspring_energy[sp_id] = sp['offspring_energy']
+        starvation[sp_id] = sp['starvation']
+        hidden_sizes[sp_id] = sp['hidden_size']
+
+    # Prey matrix [MAX_SPECIES, MAX_SPECIES] - prey_matrix[pred][prey] = 1 if pred can eat prey
+    prey_matrix = torch.zeros((MAX_SPECIES, MAX_SPECIES), dtype=torch.bool, device=DEVICE)
+    for sp_id in range(num_sp):
+        for prey_id in SPECIES_CONFIG[sp_id]['prey']:
+            if prey_id < MAX_SPECIES:
+                prey_matrix[sp_id, prey_id] = True
+
+    return {
+        'metabolism': metabolism,
+        'repro_threshold': repro_threshold,
+        'repro_cost': repro_cost,
+        'offspring_energy': offspring_energy,
+        'starvation': starvation,
+        'hidden_sizes': hidden_sizes,
+        'prey_matrix': prey_matrix,
+        'num_species': num_sp,
+    }
+
+
+# Global species tensors (rebuilt when species split)
+SPECIES_TENSORS = build_species_tensors()
 
 
 # =============================================================================
@@ -201,6 +249,11 @@ class GPULifeGame:
         # Position indices for vectorized operations
         self.rows = torch.arange(size, device=DEVICE).view(-1, 1).expand(size, size)
         self.cols = torch.arange(size, device=DEVICE).view(1, -1).expand(size, size)
+
+        # Pre-allocated kernels and tensors for CUDA optimization
+        self.crowding_kernel = torch.ones((1, 1, 3, 3), device=DEVICE)
+        self.crowding_kernel[0, 0, 1, 1] = 0
+        self.neuron_idx = torch.arange(MAX_HIDDEN_SIZE, device=DEVICE).view(1, 1, -1)
 
         # Load saved weights if available
         self.saved_w1, self.saved_w2, self.saved_hidden_size = self._load_saved_weights()
@@ -352,17 +405,12 @@ class GPULifeGame:
         return inputs
 
     def _batch_forward(self, inputs):
-        """Batch forward pass through all cells' neural networks."""
+        """Batch forward pass through all cells' neural networks (CUDA optimized)."""
         h = torch.tanh(torch.einsum('ijk,ijkl->ijl', inputs, self.w1))
 
-        # Apply species-specific hidden layer mask
-        neuron_idx = torch.arange(MAX_HIDDEN_SIZE, device=DEVICE).view(1, 1, -1)
-        hidden_sizes = torch.zeros((self.size, self.size), dtype=torch.int32, device=DEVICE)
-        for sp_id in range(len(SPECIES_CONFIG)):
-            hidden_sizes = torch.where(self.species == sp_id,
-                                       torch.full_like(hidden_sizes, SPECIES_CONFIG[sp_id]['hidden_size']),
-                                       hidden_sizes)
-        mask = (neuron_idx < hidden_sizes.unsqueeze(-1)).float()
+        # Apply species-specific hidden layer mask (vectorized lookup)
+        hidden_sizes = self._get_species_param_fast(SPECIES_TENSORS['hidden_sizes'].float()).int()
+        mask = (self.neuron_idx < hidden_sizes.unsqueeze(-1)).float()
         h = h * mask
 
         logits = torch.einsum('ijk,ijkl->ijl', h, self.w2)
@@ -385,48 +433,44 @@ class GPULifeGame:
         return actions
 
     # -------------------------------------------------------------------------
-    # Game Logic
+    # Game Logic (CUDA Optimized)
     # -------------------------------------------------------------------------
-    def _get_species_param(self, param_name):
-        """Get species-specific parameter as a tensor."""
-        result = torch.zeros((self.size, self.size), dtype=torch.float32, device=DEVICE)
-        for i in range(len(SPECIES_CONFIG)):
-            value = SPECIES_CONFIG[i][param_name]
-            result = torch.where(self.species == i, torch.full_like(result, value), result)
-        return result
+    def _get_species_param_fast(self, param_tensor):
+        """Get species-specific parameter using pre-built lookup tensor (O(1) per cell)."""
+        # param_tensor is [MAX_SPECIES], self.species is [H, W]
+        # Use advanced indexing for vectorized lookup
+        species_clamped = self.species.clamp(0, MAX_SPECIES - 1).long()
+        return param_tensor[species_clamped]
 
-    def _is_valid_prey(self, predator_species, neighbor_species):
-        """Check if neighbors are valid prey for predators."""
-        is_prey = torch.zeros_like(predator_species, dtype=torch.bool)
-        for sp_id in range(len(SPECIES_CONFIG)):
-            prey_list = SPECIES_CONFIG[sp_id]['prey']
-            if prey_list:
-                is_this_predator = (predator_species == sp_id)
-                for prey_id in prey_list:
-                    is_this_prey = (neighbor_species == prey_id)
-                    is_prey = is_prey | (is_this_predator & is_this_prey)
-        return is_prey
+    def _is_valid_prey_fast(self, predator_species, neighbor_species):
+        """Check if neighbors are valid prey using pre-built prey matrix (O(1))."""
+        # prey_matrix[pred, prey] = True if pred can eat prey
+        pred_clamped = predator_species.clamp(0, MAX_SPECIES - 1).long()
+        prey_clamped = neighbor_species.clamp(0, MAX_SPECIES - 1).long()
+        # Flatten for 2D indexing, then reshape
+        flat_pred = pred_clamped.view(-1)
+        flat_prey = prey_clamped.view(-1)
+        result = SPECIES_TENSORS['prey_matrix'][flat_pred, flat_prey]
+        return result.view(predator_species.shape)
 
     def step(self):
-        """Execute one simulation step."""
+        """Execute one simulation step (CUDA optimized)."""
         self.is_newborn.fill_(False)
 
-        # Metabolism
-        metabolism_map = self._get_species_param('metabolism')
+        # Metabolism (vectorized lookup)
+        metabolism_map = self._get_species_param_fast(SPECIES_TENSORS['metabolism'])
         self.energy = torch.where(self.alive, self.energy - metabolism_map, self.energy)
 
-        # Crowding penalty
+        # Crowding penalty (already optimized with conv2d)
         alive_f = self.alive.float()
-        kernel = torch.ones((1, 1, 3, 3), device=DEVICE)
-        kernel[0, 0, 1, 1] = 0
         padded = F.pad(alive_f.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='circular')
-        neighbors = F.conv2d(padded, kernel).squeeze()
+        neighbors = F.conv2d(padded, self.crowding_kernel).squeeze()
         crowding_cost = torch.clamp(neighbors - CROWDING_THRESHOLD, min=0) * CROWDING_PENALTY
         self.energy = torch.where(self.alive, self.energy - crowding_cost, self.energy)
 
-        # Starvation
+        # Starvation (vectorized lookup)
         self.hunger = torch.where(self.alive, self.hunger + 1, self.hunger)
-        starvation_map = self._get_species_param('starvation')
+        starvation_map = self._get_species_param_fast(SPECIES_TENSORS['starvation'])
         self.energy = torch.where(self.hunger >= starvation_map.int(), torch.zeros_like(self.energy), self.energy)
 
         # Neural network decision
@@ -461,12 +505,17 @@ class GPULifeGame:
 
         self.generation += 1
 
-        # Statistics
-        total = 0
+        # Statistics (vectorized with bincount)
+        alive_species = self.species[self.alive].long()
+        if len(alive_species) > 0:
+            counts = torch.bincount(alive_species, minlength=MAX_SPECIES)
+            total = len(alive_species)
+        else:
+            counts = torch.zeros(MAX_SPECIES, dtype=torch.long, device=DEVICE)
+            total = 0
+
         for sp_id in range(len(SPECIES_CONFIG)):
-            count = ((self.species == sp_id) & self.alive).sum().item()
-            self.history['species'][sp_id].append(count)
-            total += count
+            self.history['species'][sp_id].append(counts[sp_id].item())
         self.history['population'].append(total)
 
     def _parallel_actions(self, actions):
@@ -510,7 +559,7 @@ class GPULifeGame:
             self._parallel_eat(is_eat)
 
         # Reproduction
-        repro_threshold = self._get_species_param('repro_threshold')
+        repro_threshold = self._get_species_param_fast(SPECIES_TENSORS['repro_threshold'])
         is_reproduce = self.alive & (actions == ACTION_REPRODUCE) & (self.energy >= repro_threshold)
         if is_reproduce.any():
             self._parallel_reproduce(is_reproduce)
@@ -537,7 +586,7 @@ class GPULifeGame:
             neighbor_species = self.species[neighbor_r, neighbor_c]
             neighbor_energy = self.energy[neighbor_r, neighbor_c]
 
-            is_valid_prey = self._is_valid_prey(my_species, neighbor_species)
+            is_valid_prey = self._is_valid_prey_fast(my_species, neighbor_species)
             can_attack = predator_eat & neighbor_alive & is_valid_prey
             attack_success = torch.rand_like(self.energy) < 0.5
             can_eat = can_attack & attack_success
@@ -568,7 +617,7 @@ class GPULifeGame:
             neighbor_species = self.species[neighbor_r, neighbor_c]
             neighbor_energy = self.energy[neighbor_r, neighbor_c]
 
-            is_valid_prey = self._is_valid_prey(my_species, neighbor_species)
+            is_valid_prey = self._is_valid_prey_fast(my_species, neighbor_species)
             can_attack = predator_eat & neighbor_alive & is_valid_prey
             attack_success = torch.rand_like(self.energy) < 0.5
             can_eat = can_attack & attack_success
@@ -591,12 +640,13 @@ class GPULifeGame:
                 predator_eat = predator_eat & ~can_eat
 
     def _parallel_reproduce(self, is_reproduce):
-        """Handle reproduction with inheritance and mutation."""
+        """Handle reproduction with inheritance and mutation (CUDA optimized)."""
         dirs = [(-1, 0), (1, 0), (0, -1), (0, 1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
 
-        repro_threshold = self._get_species_param('repro_threshold')
-        repro_cost = self._get_species_param('repro_cost')
-        offspring_energy = self._get_species_param('offspring_energy')
+        # Vectorized parameter lookups
+        repro_threshold = self._get_species_param_fast(SPECIES_TENSORS['repro_threshold'])
+        repro_cost = self._get_species_param_fast(SPECIES_TENSORS['repro_cost'])
+        offspring_energy = self._get_species_param_fast(SPECIES_TENSORS['offspring_energy'])
 
         for dr, dc in dirs:
             target_r = (self.rows + dr) % self.size
@@ -631,40 +681,61 @@ class GPULifeGame:
                     is_reproduce = is_reproduce & ~winner
 
     def _apply_rl_update(self):
-        """Apply policy gradient updates based on rewards."""
+        """Apply policy gradient updates based on rewards (CUDA optimized - fully vectorized)."""
         has_reward = self.alive & (self.reward != 0)
         if not has_reward.any():
             return
 
-        reward_cells = has_reward.nonzero(as_tuple=False)
+        # Get cells with rewards
+        reward_mask = has_reward
+        rewards = self.reward[reward_mask]  # [N]
+        actions = self.last_action[reward_mask]  # [N]
+        hidden = self.last_hidden[reward_mask]  # [N, H]
+        inputs = self.last_inputs[reward_mask]  # [N, I]
 
-        for idx in range(min(len(reward_cells), 1000)):
-            r, c = reward_cells[idx]
-            reward = self.reward[r, c].item()
-            action = self.last_action[r, c].item()
-            h = self.last_hidden[r, c]
+        # Limit to avoid memory issues
+        n = min(len(rewards), 2000)
+        if n < len(rewards):
+            perm = torch.randperm(len(rewards), device=DEVICE)[:n]
+            rewards = rewards[perm]
+            actions = actions[perm]
+            hidden = hidden[perm]
+            inputs = inputs[perm]
+            # Get corresponding positions
+            positions = reward_mask.nonzero(as_tuple=False)[perm]
+        else:
+            positions = reward_mask.nonzero(as_tuple=False)
 
-            # Update w2
-            self.w2[r, c, :, action] += RL_LEARNING_RATE * reward * h
+        rows, cols = positions[:, 0], positions[:, 1]
 
-            # Update w1
-            input_vec = self.last_inputs[r, c]
-            active_neurons = (h.abs() > 0.1).nonzero(as_tuple=False).squeeze(-1)
-            for neuron in active_neurons[:4]:
-                self.w1[r, c, :, neuron] += RL_LEARNING_RATE * reward * 0.1 * input_vec * torch.sign(h[neuron])
+        # Vectorized w2 update: w2[r, c, :, action] += lr * reward * h
+        # Create one-hot action vectors [N, NUM_ACTIONS]
+        action_onehot = F.one_hot(actions, NUM_ACTIONS).float()  # [N, A]
+        # delta_w2[n, h, a] = lr * reward[n] * hidden[n, h] * onehot[n, a]
+        delta_w2 = RL_LEARNING_RATE * rewards.view(-1, 1, 1) * hidden.unsqueeze(-1) * action_onehot.unsqueeze(1)
+        # Apply updates
+        self.w2[rows, cols] += delta_w2
+
+        # Vectorized w1 update (simplified: update all neurons proportional to activation)
+        # delta_w1[n, i, h] = lr * 0.1 * reward[n] * input[n, i] * sign(h[n, h]) * (|h| > 0.1)
+        h_sign = torch.sign(hidden)  # [N, H]
+        h_active = (hidden.abs() > 0.1).float()  # [N, H]
+        # delta_w1[n, i, h] = lr * 0.1 * reward[n] * input[n, i] * sign[n, h] * active[n, h]
+        delta_w1 = RL_LEARNING_RATE * 0.1 * rewards.view(-1, 1, 1) * inputs.unsqueeze(-1) * (h_sign * h_active).unsqueeze(1)
+        self.w1[rows, cols] += delta_w1
 
         self.reward.fill_(0)
 
     def _check_and_split_dominant_species(self):
-        """Split dominant species to maintain ecosystem diversity."""
+        """Split dominant species to maintain ecosystem diversity (CUDA optimized)."""
         total_alive = self.alive.sum().item()
         if total_alive < 10:
             return False
 
-        species_counts = []
-        for sp_id in range(len(SPECIES_CONFIG)):
-            count = ((self.species == sp_id) & self.alive).sum().item()
-            species_counts.append(count)
+        # Vectorized species counting with bincount
+        alive_species = self.species[self.alive].long()
+        counts = torch.bincount(alive_species, minlength=MAX_SPECIES)
+        species_counts = counts[:len(SPECIES_CONFIG)].tolist()
 
         max_count = max(species_counts)
         dominant_species = species_counts.index(max_count)
