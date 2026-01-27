@@ -54,7 +54,7 @@ CROWDING_PENALTY = 0.5
 
 # Species configuration
 INITIAL_NUM_SPECIES = 10
-MAX_SPECIES = 50
+MAX_SPECIES = 500
 SPECIES_METABOLISM = 0.1
 SPECIES_REPRO_THRESHOLD = 20
 SPECIES_REPRO_COST = 8
@@ -73,8 +73,8 @@ RANDOM_MUTATION_CHANCE = 0.1  # Probability per species per check
 EXTINCT_RECYCLE_DELAY = 50  # Generations before extinct species slot can be reused
 
 # Blob-based speciation
-BLOB_SEPARATION_DELAY = 50  # Generations of separation before blob becomes new species
-BLOB_CHECK_INTERVAL = 25    # Check for blob separation every N generations (higher = less lag)
+BLOB_SEPARATION_DELAY = 0   # Generations of separation before blob becomes new species (0 = immediate)
+BLOB_CHECK_INTERVAL = 100   # Check for blob separation every N generations
 
 # Performance tuning
 HISTORY_WINDOW = 1000       # Keep only last N generations in history (0 = unlimited)
@@ -119,11 +119,23 @@ SPECIES_CONFIG = []
 SPECIES_CHILD_COUNT = {}
 
 
-def generate_random_color(index: int, total: int) -> tuple:
-    """Generate a visually distinct color using HSV color space."""
-    hue = (index / max(total, 1)) % 1.0
-    saturation = 0.7 + np.random.random() * 0.3
-    value = 0.7 + np.random.random() * 0.3
+def generate_random_color(index: int) -> tuple:
+    """Generate a visually distinct color using HSV color space with golden ratio.
+
+    Args:
+        index: Species ID (used to generate unique color)
+    """
+    # Use golden ratio to maximize color difference between adjacent species
+    # This ensures new species have visually distinct colors even with many species
+    GOLDEN_RATIO = 0.618033988749895
+    hue = (index * GOLDEN_RATIO) % 1.0
+
+    # Vary saturation and value for additional distinction
+    # Use index-based seed for reproducibility
+    np.random.seed(index + 1000)
+    saturation = 0.65 + np.random.random() * 0.35
+    value = 0.70 + np.random.random() * 0.30
+
     return colorsys.hsv_to_rgb(hue, saturation, value)
 
 
@@ -132,7 +144,7 @@ def create_species_config(sp_id: int, num_total: int, name: str = None) -> dict:
     prey_list = [j for j in range(num_total) if j != sp_id]
     return {
         'name': name or f'S{sp_id}',
-        'color': generate_random_color(sp_id, max(num_total, MAX_SPECIES)),
+        'color': generate_random_color(sp_id),
         'prey': prey_list,
         'metabolism': SPECIES_METABOLISM,
         'repro_threshold': SPECIES_REPRO_THRESHOLD,
@@ -192,7 +204,7 @@ def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREME
 
         SPECIES_CONFIG[new_id] = {
             'name': new_name,
-            'color': generate_random_color(new_id, MAX_SPECIES),
+            'color': generate_random_color(new_id),
             'prey': [j for j in range(len(SPECIES_CONFIG)) if j != new_id],
             'metabolism': SPECIES_METABOLISM,
             'repro_threshold': SPECIES_REPRO_THRESHOLD,
@@ -204,6 +216,9 @@ def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREME
             'extinct': False,
             'extinct_gen': None,
         }
+
+        # Reset child count for recycled slot
+        SPECIES_CHILD_COUNT[new_id] = 0
 
         print(f"             [Recycled slot {new_id} from extinct {old_name}]")
 
@@ -889,12 +904,15 @@ class GPULifeGame:
             # Multiple blobs detected - track separation
             if sp_id not in self.blob_separation_tracker:
                 self.blob_separation_tracker[sp_id] = self.generation
-                continue
+                # If delay is 0, speciate immediately without waiting
+                if BLOB_SEPARATION_DELAY > 0:
+                    continue
 
             # Check if separated long enough
-            separation_duration = self.generation - self.blob_separation_tracker[sp_id]
-            if separation_duration < BLOB_SEPARATION_DELAY:
-                continue
+            if BLOB_SEPARATION_DELAY > 0:
+                separation_duration = self.generation - self.blob_separation_tracker[sp_id]
+                if separation_duration < BLOB_SEPARATION_DELAY:
+                    continue
 
             # Blob separation speciation!
             # The second largest blob becomes a new species
@@ -916,8 +934,14 @@ class GPULifeGame:
             parent_name = SPECIES_CONFIG[sp_id]['name']
             new_name = SPECIES_CONFIG[new_species_id]['name']
 
-            print(f"\n[ISOLATION] Geographic separation in {parent_name}")
-            print(f"            Blob split after {separation_duration} generations apart")
+            if BLOB_SEPARATION_DELAY > 0:
+                separation_duration = self.generation - self.blob_separation_tracker[sp_id]
+                print(f"\n[ISOLATION] Geographic separation in {parent_name}")
+                print(f"            Blob split after {separation_duration} generations apart")
+            else:
+                print(f"\n[ISOLATION] Geographic separation detected in {parent_name}")
+                print(f"            Immediate speciation triggered")
+
             print(f"            New species: {new_name} ({num_converted} cells)")
             print(f"            Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
 
@@ -1032,6 +1056,9 @@ class GPULifeGame:
             if count == 0 and not SPECIES_CONFIG[sp_id]['extinct']:
                 SPECIES_CONFIG[sp_id]['extinct'] = True
                 SPECIES_CONFIG[sp_id]['extinct_gen'] = self.generation
+                # Clear blob separation tracker for extinct species
+                if sp_id in self.blob_separation_tracker:
+                    del self.blob_separation_tracker[sp_id]
 
         new_species_id = add_new_species(dominant_species, current_gen=self.generation)
         if new_species_id is None:
@@ -1170,7 +1197,10 @@ def print_system_info():
     print(f"  60% gain neurons, 40% lose neurons")
     print(f"\n[Geographic Isolation]")
     print(f"  Blob separation check every {BLOB_CHECK_INTERVAL} generations")
-    print(f"  Auto-speciate after {BLOB_SEPARATION_DELAY} generations apart")
+    if BLOB_SEPARATION_DELAY > 0:
+        print(f"  Auto-speciate after {BLOB_SEPARATION_DELAY} generations apart")
+    else:
+        print(f"  Auto-speciate immediately when separated blobs detected")
     print(f"\n[Network Persistence]")
     print(f"  Save best network every {SAVE_INTERVAL} generations to: {SAVE_FILE}")
     print(f"  Fitness = lifetime + reproduction_count * 10")
@@ -1187,62 +1217,68 @@ def main():
     game = GPULifeGame()
 
     # Create figure with subplots
-    fig = plt.figure(figsize=(16, 10))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 3], width_ratios=[2, 1], hspace=0.15, wspace=0.1)
+    fig = plt.figure(figsize=(18, 10))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1, 2], width_ratios=[2, 1, 1],
+                          hspace=0.15, wspace=0.15)
 
-    # Top: Global statistics
-    ax_global = fig.add_subplot(gs[0, :])
+    # Top left: Global statistics (full history)
+    ax_global = fig.add_subplot(gs[0, :2])
     global_species_lines = []
     for sp_id in range(len(SPECIES_CONFIG)):
         color = SPECIES_CONFIG[sp_id]['color']
         name = SPECIES_CONFIG[sp_id]['name']
-        line, = ax_global.plot([], [], color=color, label=name, linewidth=2)
+        line, = ax_global.plot([], [], color=color, label=name, linewidth=1.5)
         global_species_lines.append(line)
-    line_global_total, = ax_global.plot([], [], 'k--', label='Total', linewidth=1.5)
+    line_global_total, = ax_global.plot([], [], 'k--', label='Total', linewidth=2)
     ax_global.set_xlim(0, 100)
     ax_global.set_ylim(0, game.size * game.size * 0.15)
-    ax_global.set_xlabel('Generation')
-    ax_global.set_ylabel('Population', color='black')
+    ax_global.set_xlabel('Generation', fontsize=9)
+    ax_global.set_ylabel('Population', fontsize=9)
     ax_global.grid(True, alpha=0.3)
-    lines = global_species_lines + [line_global_total]
-    labels = [l.get_label() for l in lines]
-    ax_global.legend(lines, labels, loc='upper right', fontsize=8, ncol=5)
-    ax_global.set_title('Global Ecosystem Dynamics')
+    ax_global.set_title('Global Ecosystem Dynamics (Full History)', fontsize=10)
+    ax_global.legend().set_visible(False)  # Hide legend, will show in right panel
 
-    # Bottom left: Main display
+    # Bottom left: Main display (simulation environment)
     ax_main = fig.add_subplot(gs[1, 0])
     img_display = ax_main.imshow(game.render(), interpolation='nearest')
-    mode_str = "VALIDATE" if ARGS.validate else ""
-    ax_main.set_title(f'Digital Primordial Soup {mode_str} - Gen 0')
+    ax_main.set_title(f'Environment - Gen 0', fontsize=10)
     ax_main.axis('off')
 
-    # Bottom right: Species statistics
-    ax_stats = fig.add_subplot(gs[1, 1])
-    species_lines = []
+    # Bottom middle: Recent species dynamics (last 100 generations)
+    ax_recent = fig.add_subplot(gs[1, 1])
+    recent_species_lines = []
     for sp_id in range(len(SPECIES_CONFIG)):
         color = SPECIES_CONFIG[sp_id]['color']
-        name = SPECIES_CONFIG[sp_id]['name']
-        line, = ax_stats.plot([], [], color=color, label=f'{sp_id}: {name}', linewidth=1.5)
-        species_lines.append(line)
-    line_total, = ax_stats.plot([], [], 'k--', label='Total', linewidth=1)
-    ax_stats.set_xlim(0, 100)
-    ax_stats.set_ylim(0, game.size * game.size * 0.15)
-    ax_stats.set_xlabel('Generation')
-    ax_stats.set_ylabel('Population')
-    ax_stats.legend(loc='upper right', fontsize=7)
-    ax_stats.set_title('Species Dynamics')
-    ax_stats.grid(True, alpha=0.3)
+        line, = ax_recent.plot([], [], color=color, linewidth=1.5)
+        recent_species_lines.append(line)
+    line_recent_total, = ax_recent.plot([], [], 'k--', label='Total', linewidth=2)
+    ax_recent.set_xlim(0, 100)
+    ax_recent.set_ylim(0, game.size * game.size * 0.15)
+    ax_recent.set_xlabel('Generation', fontsize=9)
+    ax_recent.set_ylabel('Population', fontsize=9)
+    ax_recent.grid(True, alpha=0.3)
+    ax_recent.set_title('Recent Dynamics (Last 100 Gen)', fontsize=10)
 
-    # Info text overlay
-    info_text = ax_main.text(0.02, 0.98, '', transform=ax_main.transAxes,
-                              fontsize=8, verticalalignment='top',
-                              color='white', family='monospace',
-                              bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+    # Right panel: Species legend and statistics
+    ax_legend = fig.add_subplot(gs[:, 2])
+    ax_legend.axis('off')
+    ax_legend.set_xlim(0, 1)
+    ax_legend.set_ylim(0, 1)
+
+    # Background box
+    from matplotlib.patches import Rectangle
+    bg_box = Rectangle((0.02, 0.02), 0.96, 0.96, transform=ax_legend.transAxes,
+                       facecolor='white', edgecolor='gray', alpha=0.95, zorder=0)
+    ax_legend.add_patch(bg_box)
+
+    # Store legend elements for updating
+    legend_patches = []
+    legend_texts = []
 
     frame_counter = [0]  # Use list for nonlocal mutation
 
     def update(_frame):
-        nonlocal species_lines, global_species_lines
+        nonlocal recent_species_lines, global_species_lines
 
         start = time.time()
         # Run multiple steps per frame for faster simulation
@@ -1256,20 +1292,17 @@ def main():
         should_update_charts = (frame_counter[0] % CHART_UPDATE_INTERVAL == 0)
 
         # Add new species lines if needed (always check this)
-        while len(species_lines) < len(SPECIES_CONFIG):
-            sp_id = len(species_lines)
+        while len(recent_species_lines) < len(SPECIES_CONFIG):
+            sp_id = len(recent_species_lines)
             color = SPECIES_CONFIG[sp_id]['color']
-            name = SPECIES_CONFIG[sp_id]['name']
-            line, = ax_stats.plot([], [], color=color, label=f'{sp_id}: {name}', linewidth=1.5)
-            species_lines.append(line)
-            line2, = ax_global.plot([], [], color=color, label=name, linewidth=2)
+            line1, = ax_recent.plot([], [], color=color, linewidth=1.5)
+            recent_species_lines.append(line1)
+            line2, = ax_global.plot([], [], color=color, linewidth=1.5)
             global_species_lines.append(line2)
-            ax_stats.legend(loc='upper right', fontsize=7)
-            ax_global.legend(loc='upper right', fontsize=8, ncol=min(len(SPECIES_CONFIG), 5))
 
         # Always update display (fast operation)
         img_display.set_array(game.render())
-        ax_main.set_title(f'Digital Primordial Soup {mode_str} - Gen {game.generation} ({len(SPECIES_CONFIG)} species)')
+        ax_main.set_title(f'Environment - Gen {game.generation}', fontsize=10)
 
         # Update charts only every CHART_UPDATE_INTERVAL frames (expensive operations)
         if should_update_charts:
@@ -1281,79 +1314,127 @@ def main():
             else:
                 gens = list(range(history_len))
 
-            for sp_id in range(len(species_lines)):
+            # Update global chart (full history)
+            for sp_id in range(len(global_species_lines)):
                 if sp_id < len(game.history['species']):
-                    species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
-            line_total.set_data(gens, game.history['population'])
+                    is_extinct = SPECIES_CONFIG[sp_id].get('extinct', False)
+                    global_species_lines[sp_id].set_visible(not is_extinct)
+                    global_species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
+            line_global_total.set_data(gens, game.history['population'])
 
-            if history_len > 100:
-                ax_stats.set_xlim(gens[-100] if len(gens) >= 100 else gens[0], gens[-1] if gens else 100)
+            # Update recent chart (last 100 generations)
+            recent_window = min(100, history_len)
+            recent_gens = gens[-recent_window:] if gens else []
+            for sp_id in range(len(recent_species_lines)):
+                if sp_id < len(game.history['species']):
+                    is_extinct = SPECIES_CONFIG[sp_id].get('extinct', False)
+                    recent_species_lines[sp_id].set_visible(not is_extinct)
+                    recent_data = game.history['species'][sp_id][-recent_window:]
+                    recent_species_lines[sp_id].set_data(recent_gens, recent_data)
+
+            if recent_gens:
+                line_recent_total.set_data(recent_gens, game.history['population'][-recent_window:])
+                ax_recent.set_xlim(recent_gens[0], recent_gens[-1])
+
+            # Update x/y limits
             ax_global.set_xlim(gens[0] if gens else 0, max(gens[-1] if gens else 100, 100))
 
             if game.history['population']:
                 max_pop = max(game.history['population']) * 1.2
-                ax_stats.set_ylim(0, max(max_pop, 100))
+                ax_recent.set_ylim(0, max(max_pop, 100))
                 ax_global.set_ylim(0, max(max_pop, 100))
 
-            for sp_id in range(len(global_species_lines)):
-                if sp_id < len(game.history['species']):
-                    global_species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
-            line_global_total.set_data(gens, game.history['population'])
-
-        # Hide extinct species from legend (only check when updating charts)
-        if should_update_charts:
-            legend_needs_update = False
-            for sp_id in range(len(SPECIES_CONFIG)):
-                is_extinct = SPECIES_CONFIG[sp_id].get('extinct', False)
-
-                if sp_id < len(species_lines):
-                    # Only update if visibility changed
-                    if species_lines[sp_id].get_visible() != (not is_extinct):
-                        species_lines[sp_id].set_visible(not is_extinct)
-                        if is_extinct:
-                            species_lines[sp_id].set_label('_hidden')
-                        else:
-                            name = SPECIES_CONFIG[sp_id]['name']
-                            species_lines[sp_id].set_label(f'{sp_id}: {name}')
-                        legend_needs_update = True
-
-                if sp_id < len(global_species_lines):
-                    if global_species_lines[sp_id].get_visible() != (not is_extinct):
-                        global_species_lines[sp_id].set_visible(not is_extinct)
-                        if is_extinct:
-                            global_species_lines[sp_id].set_label('_hidden')
-                        else:
-                            name = SPECIES_CONFIG[sp_id]['name']
-                            global_species_lines[sp_id].set_label(name)
-                        legend_needs_update = True
-
-            if legend_needs_update:
-                ax_stats.legend(loc='upper right', fontsize=7)
-                ax_global.legend(loc='upper right', fontsize=8, ncol=min(len(SPECIES_CONFIG), 5))
-
-        # Update info text (only show alive species)
+        # Update species legend panel (right side)
         total = game.history['population'][-1] if game.history['population'] else 0
         alive_species_count = sum(1 for sp in SPECIES_CONFIG if not sp.get('extinct', False))
-        info = f"Gen: {game.generation} | Species: {alive_species_count} | Pop: {total}\n"
+
+        # Clear previous legend elements
+        for patch in legend_patches:
+            patch.remove()
+        for text in legend_texts:
+            text.remove()
+        legend_patches.clear()
+        legend_texts.clear()
+
+        # Header information
+        y_pos = 0.96
+        header_lines = [
+            f"Gen: {game.generation}",
+            f"Species: {alive_species_count}",
+            f"Population: {total}",
+            f"Step: {elapsed*1000:.1f}ms",
+            "=" * 30
+        ]
+        for line in header_lines:
+            txt = ax_legend.text(0.05, y_pos, line, transform=ax_legend.transAxes,
+                                fontsize=8, family='monospace', va='top')
+            legend_texts.append(txt)
+            y_pos -= 0.03
+
+        y_pos -= 0.01  # Extra space after header
+
+        # Build species list with color, number, count, and percentage
+        species_data = []
         for sp_id in range(len(SPECIES_CONFIG)):
             if SPECIES_CONFIG[sp_id].get('extinct', False):
-                continue  # Skip extinct species entirely
+                continue  # Skip extinct species
+
             if sp_id < len(game.history['species']) and game.history['species'][sp_id]:
                 count = game.history['species'][sp_id][-1]
             else:
                 count = 0
-            name = SPECIES_CONFIG[sp_id]['name']
+
+            # Mark species as extinct if count is 0
             if count == 0:
-                SPECIES_CONFIG[sp_id]['extinct'] = True
-            else:
-                info += f"{name}: {count}\n"
-        info += f"Step: {elapsed*1000:.1f}ms"
-        info_text.set_text(info)
+                if not SPECIES_CONFIG[sp_id]['extinct']:
+                    SPECIES_CONFIG[sp_id]['extinct'] = True
+                    SPECIES_CONFIG[sp_id]['extinct_gen'] = game.generation
+                    # Clear blob separation tracker for extinct species
+                    if sp_id in game.blob_separation_tracker:
+                        del game.blob_separation_tracker[sp_id]
+                continue
 
+            name = SPECIES_CONFIG[sp_id]['name']
+            pct = (count / total * 100) if total > 0 else 0
+            color = SPECIES_CONFIG[sp_id]['color']
+            species_data.append((sp_id, name, count, pct, color))
+
+        # Sort by population (descending)
+        species_data.sort(key=lambda x: x[2], reverse=True)
+
+        # Draw species info with colored squares
+        from matplotlib.patches import Rectangle
+        for sp_id, name, count, pct, color in species_data:
+            if y_pos < 0.05:  # Stop if we run out of space
+                break
+
+            # Draw colored square
+            square = Rectangle((0.05, y_pos - 0.015), 0.02, 0.02,
+                              transform=ax_legend.transAxes,
+                              facecolor=color, edgecolor='black', linewidth=0.5)
+            ax_legend.add_patch(square)
+            legend_patches.append(square)
+
+            # Draw text: name, count, percentage
+            txt = ax_legend.text(0.08, y_pos, f"{name:10s} {count:6d} ({pct:5.1f}%)",
+                                transform=ax_legend.transAxes,
+                                fontsize=7, family='monospace', va='top')
+            legend_texts.append(txt)
+            y_pos -= 0.025
+
+        # Extinct message
         if game.is_extinct():
-            info_text.set_text(info + "\n\nEXTINCT!")
+            y_pos -= 0.02
+            extinct_lines = ["=" * 30, "    EXTINCT!", "=" * 30]
+            for line in extinct_lines:
+                txt = ax_legend.text(0.05, y_pos, line, transform=ax_legend.transAxes,
+                                    fontsize=9, family='monospace', va='top',
+                                    color='red', weight='bold')
+                legend_texts.append(txt)
+                y_pos -= 0.03
 
-        return [img_display, *species_lines, line_total, *global_species_lines, line_global_total, info_text]
+        return [img_display, *recent_species_lines, line_recent_total,
+                *global_species_lines, line_global_total, *legend_patches, *legend_texts]
 
     ani = animation.FuncAnimation(fig, update, interval=50, blit=False, cache_frame_data=False)
     plt.tight_layout()
