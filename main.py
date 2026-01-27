@@ -19,6 +19,8 @@ import time
 import os
 import argparse
 from scipy import ndimage
+import threading
+import queue
 
 # =============================================================================
 # COMMAND LINE ARGUMENTS
@@ -45,7 +47,7 @@ print(f"Using device: {DEVICE}")
 # SIMULATION PARAMETERS
 # =============================================================================
 # Grid and energy
-GRID_SIZE = 500 #ARGS.grid
+GRID_SIZE = 300 #ARGS.grid
 INITIAL_ENERGY = 30.0
 MAX_ENERGY = 100.0
 MOVE_COST = 0.2
@@ -53,7 +55,7 @@ CROWDING_THRESHOLD = 4
 CROWDING_PENALTY = 0.5
 
 # Species configuration
-INITIAL_NUM_SPECIES = 10
+INITIAL_NUM_SPECIES = 5
 MAX_SPECIES = 500
 SPECIES_METABOLISM = 0.1
 SPECIES_REPRO_THRESHOLD = 20
@@ -335,6 +337,57 @@ SPECIES_TENSORS = build_species_tensors()
 
 
 # =============================================================================
+# ASYNC WEIGHT SAVER
+# =============================================================================
+class AsyncWeightSaver:
+    """Asynchronous weight saver to avoid blocking the main thread during torch.save()."""
+
+    def __init__(self):
+        self.save_queue = queue.Queue(maxsize=2)  # Limit queue size to avoid memory issues
+        self.worker_thread = threading.Thread(target=self._save_worker, daemon=True)
+        self.worker_thread.start()
+        self.saving = False
+
+    def _save_worker(self):
+        """Background worker that processes save requests."""
+        while True:
+            checkpoint, filepath = self.save_queue.get()
+            if checkpoint is None:  # Sentinel to stop thread
+                break
+            try:
+                self.saving = True
+                torch.save(checkpoint, filepath)
+                print(f"[SAVED] Fitness={checkpoint['fitness']:.1f}, Hidden={checkpoint['hidden_size']}, Gen {checkpoint['generation']}")
+            except Exception as e:
+                print(f"[ERROR] Failed to save weights: {e}")
+            finally:
+                self.saving = False
+                self.save_queue.task_done()
+
+    def save_async(self, checkpoint, filepath):
+        """Queue a checkpoint for asynchronous saving."""
+        try:
+            # Try to add to queue without blocking
+            # If queue is full, skip this save (previous save still in progress)
+            self.save_queue.put_nowait((checkpoint, filepath))
+        except queue.Full:
+            print("[SKIP] Save queue full, skipping this save")
+
+    def is_saving(self):
+        """Check if a save operation is in progress."""
+        return self.saving or not self.save_queue.empty()
+
+    def shutdown(self):
+        """Shutdown the saver thread gracefully."""
+        self.save_queue.put((None, None))
+        self.worker_thread.join(timeout=5.0)
+
+
+# Global async saver instance
+ASYNC_SAVER = AsyncWeightSaver()
+
+
+# =============================================================================
 # SIMULATION ENGINE
 # =============================================================================
 class GPULifeGame:
@@ -438,18 +491,26 @@ class GPULifeGame:
             return None, None, SPECIES_HIDDEN_SIZE
 
     def _save_best_weights(self):
-        """Save the current best neural network weights and structure."""
+        """Save the current best neural network weights and structure asynchronously."""
         if self.best_w1 is None:
             return
+
+        # Skip if previous save still in progress
+        if ASYNC_SAVER.is_saving():
+            print(f"[SKIP] Previous save in progress, skipping gen {self.generation}")
+            return
+
+        # Prepare checkpoint (move to CPU to avoid GPU memory issues)
         checkpoint = {
-            'w1': self.best_w1.cpu(),
-            'w2': self.best_w2.cpu(),
+            'w1': self.best_w1.cpu().clone(),
+            'w2': self.best_w2.cpu().clone(),
             'hidden_size': self.best_hidden_size,
             'fitness': self.best_fitness,
             'generation': self.generation,
         }
-        torch.save(checkpoint, SAVE_FILE)
-        print(f"Saved best network: fitness={self.best_fitness}, hidden={self.best_hidden_size}, gen {self.generation}")
+
+        # Queue for async save (non-blocking)
+        ASYNC_SAVER.save_async(checkpoint, SAVE_FILE)
 
     def _update_best_network(self):
         """Find and track the best performing individual."""

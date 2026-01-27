@@ -125,6 +125,7 @@ python pygame_renderer.py
 ### Fitness & Persistence
 - Fitness = lifetime + reproduction_count × 10
 - Best network saved every 50 generations to `best_brain.pt`
+- **Asynchronous saving**: Uses background thread to avoid stuttering during save operations
 - 20% of initial cells inherit saved weights on startup
 
 ## Configuration
@@ -290,4 +291,5 @@ python pygame_renderer.py
 ### 适应度与持久化
 - 适应度 = 存活代数 + 繁殖次数 × 10
 - 每 50 代保存最优网络到 `best_brain.pt`
+- **异步保存**：使用后台线程避免保存时卡顿
 - 启动时 20% 的细胞继承保存的权重
