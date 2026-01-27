@@ -12,6 +12,7 @@ Features:
 Controls:
 - SPACE: Pause/Resume
 - R: Reset simulation
+- S: Save best network manually
 - C: Toggle chemical overlay
 - G: Toggle grid
 - +/-: Adjust simulation speed
@@ -96,6 +97,7 @@ class PyGameRenderer:
         print("\nControls:")
         print("  SPACE  : Pause/Resume")
         print("  R      : Reset simulation")
+        print("  S      : Save best network manually")
         print("  C      : Toggle chemical overlay")
         print("  G      : Toggle grid")
         print("  +/-    : Adjust speed")
@@ -351,6 +353,11 @@ class PyGameRenderer:
                 elif event.key == pygame.K_MINUS:
                     self.simulation_speed = max(0, self.simulation_speed - 1)
                     print(f"Speed: {self.simulation_speed}x")
+                elif event.key == pygame.K_s:
+                    # Manual save
+                    self.game._update_best_network()
+                    self.game._save_best_weights()
+                    print(f"[MANUAL SAVE] Gen {self.game.generation}, Fitness={self.game.best_fitness:.1f}")
 
             elif event.type == pygame.MOUSEWHEEL:
                 # Zoom

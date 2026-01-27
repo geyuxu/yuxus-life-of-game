@@ -76,6 +76,7 @@ python pygame_renderer.py
 # Keyboard controls:
 # - SPACE: Pause/Resume
 # - R: Reset simulation
+# - S: Save best network manually
 # - C: Toggle chemical overlay
 # - G: Toggle grid
 # - +/-: Adjust speed (1x to 10x)
@@ -130,7 +131,11 @@ python pygame_renderer.py
 - **Output (7 actions)**: Stay, Move (4 directions), Eat, Reproduce
 
 ### Evolution Mechanisms
-1. **Inheritance**: Offspring inherit parent's neural network and chemical affinity with small mutations
+1. **Sexual Reproduction with Genetic Crossover**:
+   - Organisms find mates (same-species neighbors)
+   - Offspring inherits 50% neurons from each parent (interleaved crossover)
+   - Falls back to asexual cloning if no mate available
+   - Mutation applied after inheritance (10% rate)
 2. **RL Fine-tuning**: Successful actions (hunting, escaping, reproducing) reinforce neural network weights
 3. **Dominance Speciation**: Dominant species (>75% population) split to prevent competitive exclusion
 4. **Geographic Speciation**: Species split when separated into distinct spatial clusters (checked every 100 generations)
@@ -198,7 +203,15 @@ digital-primordial-soup/
 
 ## Version History
 
-### v1.4-genome-visualization (current)
+### v1.5-sexual-reproduction (current)
+- Sexual reproduction with genetic crossover
+- Mate finding: organisms search for same-species neighbors
+- Genetic crossover: offspring inherits 50% neurons from each parent (interleaved)
+- Fallback to asexual reproduction if no mate found
+- Enhanced diversity: saved weights only 50% loaded, 50% random
+- Chemical-influenced color mapping for more diverse species colors
+
+### v1.4-genome-visualization
 - Genome-based color system (Scheme C: Hybrid Genome)
 - 12-dimensional genome: neural fingerprint (8-dim) + chemical affinity (4-dim)
 - Dynamic genome-to-color mapping in HSV space
@@ -289,6 +302,7 @@ python pygame_renderer.py
 # 键盘控制：
 # - SPACE：暂停/恢复
 # - R：重置模拟
+# - S：手动保存最佳网络
 # - C：切换化学场覆盖层
 # - G：切换网格
 # - +/-：调整速度（1x 到 10x）
@@ -325,7 +339,11 @@ python pygame_renderer.py
   - 每 50 代更新以反映进化变化
 
 ### 进化机制
-1. **遗传**：后代继承父代神经网络和化学亲和力 + 小变异
+1. **有性繁殖与基因交叉**：
+   - 生物寻找配偶（同物种邻居）
+   - 后代从父母各继承 50% 神经元（穿插交叉）
+   - 无配偶时回退到无性克隆
+   - 继承后施加变异（10% 变异率）
 2. **强化学习**：成功行为（捕猎、逃脱、繁殖）强化神经网络
 3. **优势物种分裂**：占比 >75% 的物种自动分裂防止竞争排斥
 4. **地理物种分裂**：当物种分离成不同空间集群时分裂（每 100 代检查）

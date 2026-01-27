@@ -112,6 +112,7 @@ REWARD_REPRODUCE = 1.5
 SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_FILE = os.path.join(SAVE_DIR, "best_brain.pt")
 SAVE_INTERVAL = 50
+AUTO_SAVE_ENABLED = False  # Auto-save disabled by default, use manual save instead (press 'S' in pygame)
 ELITE_RATIO = 0.2
 
 # Neural Network Architecture
@@ -1025,9 +1026,9 @@ class GPULifeGame:
         # Species splitting (dominant species)
         self._check_and_split_dominant_species()
 
-        # Save best network periodically
+        # Save best network periodically (only if auto-save enabled)
         self._update_best_network()
-        if self.generation > 0 and self.generation % SAVE_INTERVAL == 0:
+        if AUTO_SAVE_ENABLED and self.generation > 0 and self.generation % SAVE_INTERVAL == 0:
             self._save_best_weights()
 
         # Update species colors based on genome (if enabled)
