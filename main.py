@@ -98,6 +98,10 @@ MUTATION_RATE = 0.1
 DOMINANCE_THRESHOLD = 0.75  # Species split when >75% of population
 SPLIT_MUTATION_RATE = 0.3   # Higher mutation during speciation
 
+# Genome-based visualization (Scheme C: Hybrid Genome)
+GENOME_BASED_COLOR = True   # Enable genome-to-color mapping (similar genomes = similar colors)
+GENOME_COLOR_UPDATE_INTERVAL = 50  # Update species colors every N generations
+
 # Reinforcement Learning
 RL_LEARNING_RATE = 0.01
 REWARD_EAT_PREY = 2.0
@@ -388,6 +392,138 @@ ASYNC_SAVER = AsyncWeightSaver()
 
 
 # =============================================================================
+# GENETIC GENOME SYSTEM (Scheme C: Hybrid Genome)
+# =============================================================================
+
+def neural_fingerprint(w1: torch.Tensor, w2: torch.Tensor, hidden_size: int) -> np.ndarray:
+    """
+    Extract statistical fingerprint from neural network weights.
+
+    Returns 8-dimensional feature vector:
+    - w1 features (4-dim): mean, std, abs_mean, max
+    - w2 features (4-dim): mean, std, abs_mean, max
+
+    Args:
+        w1: First layer weights [hidden_size, INPUT_SIZE]
+        w2: Second layer weights [NUM_ACTIONS, hidden_size]
+        hidden_size: Hidden layer size
+
+    Returns:
+        8-dimensional numpy array representing neural fingerprint
+    """
+    # Move to CPU and convert to numpy for consistency
+    w1_np = w1.cpu().numpy() if isinstance(w1, torch.Tensor) else w1
+    w2_np = w2.cpu().numpy() if isinstance(w2, torch.Tensor) else w2
+
+    # Extract w1 features
+    w1_mean = np.mean(w1_np)
+    w1_std = np.std(w1_np)
+    w1_abs_mean = np.mean(np.abs(w1_np))
+    w1_max = np.max(np.abs(w1_np))
+
+    # Extract w2 features
+    w2_mean = np.mean(w2_np)
+    w2_std = np.std(w2_np)
+    w2_abs_mean = np.mean(np.abs(w2_np))
+    w2_max = np.max(np.abs(w2_np))
+
+    return np.array([
+        w1_mean, w1_std, w1_abs_mean, w1_max,
+        w2_mean, w2_std, w2_abs_mean, w2_max
+    ], dtype=np.float32)
+
+
+def get_full_genome(w1: torch.Tensor, w2: torch.Tensor,
+                    hidden_size: int, chemical_affinity: list) -> np.ndarray:
+    """
+    Compute hybrid genome combining neural fingerprint and chemical affinity.
+
+    Returns 12-dimensional genome vector:
+    - First 8 dimensions: neural fingerprint (genotype)
+    - Last 4 dimensions: chemical affinity (phenotype)
+
+    Args:
+        w1: First layer weights
+        w2: Second layer weights
+        hidden_size: Hidden layer size
+        chemical_affinity: Chemical affinity vector (4-dim)
+
+    Returns:
+        12-dimensional numpy array representing full genome
+    """
+    neural = neural_fingerprint(w1, w2, hidden_size)
+    chemical = np.array(chemical_affinity, dtype=np.float32)
+
+    return np.concatenate([neural, chemical])
+
+
+def genome_to_color(genome: np.ndarray) -> tuple:
+    """
+    Map genome to RGB color using HSV color space.
+
+    Uses first 3 genome dimensions (w1_mean, w1_std, w1_abs_mean) to generate:
+    - Hue: Normalized w1_mean (range 0-1)
+    - Saturation: Normalized w1_std (range 0.5-1.0)
+    - Value: Normalized w1_abs_mean (range 0.6-1.0)
+
+    Args:
+        genome: 12-dimensional genome vector
+
+    Returns:
+        RGB tuple (3 floats in range 0-1)
+    """
+    # Use first 3 neural features for color mapping
+    w1_mean = genome[0]
+    w1_std = genome[1]
+    w1_abs_mean = genome[2]
+
+    # Map to HSV with normalization
+    # Hue: Use tanh to map mean to [0, 1]
+    hue = (np.tanh(w1_mean) + 1.0) / 2.0
+
+    # Saturation: Map std to [0.5, 1.0] for vibrant colors
+    saturation = 0.5 + 0.5 * np.tanh(w1_std * 2.0)
+
+    # Value (brightness): Map abs_mean to [0.6, 1.0] for visible colors
+    value = 0.6 + 0.4 * np.tanh(w1_abs_mean)
+
+    return colorsys.hsv_to_rgb(hue, saturation, value)
+
+
+def genetic_distance(genome1: np.ndarray, genome2: np.ndarray) -> float:
+    """
+    Calculate genetic distance between two genomes using Euclidean distance.
+
+    Args:
+        genome1: First genome (12-dim)
+        genome2: Second genome (12-dim)
+
+    Returns:
+        Euclidean distance between genomes
+    """
+    return np.linalg.norm(genome1 - genome2)
+
+
+def genetic_similarity(genome1: np.ndarray, genome2: np.ndarray) -> float:
+    """
+    Calculate genetic similarity as normalized inverse distance.
+
+    Returns value in range [0, 1] where 1 = identical genomes.
+
+    Args:
+        genome1: First genome (12-dim)
+        genome2: Second genome (12-dim)
+
+    Returns:
+        Similarity score (0-1)
+    """
+    distance = genetic_distance(genome1, genome2)
+    # Use exponential decay for smooth similarity curve
+    # sigma=2.0 means similarity drops to ~0.6 at distance=1.0
+    return np.exp(-distance**2 / (2 * 2.0**2))
+
+
+# =============================================================================
 # SIMULATION ENGINE
 # =============================================================================
 class GPULifeGame:
@@ -531,6 +667,100 @@ class GPULifeGame:
             # Track the hidden size of the best individual's species
             sp_id = self.species[r, c].item()
             self.best_hidden_size = SPECIES_CONFIG[sp_id]['hidden_size']
+
+    # -------------------------------------------------------------------------
+    # Genome Computation (Scheme C: Hybrid Genome)
+    # -------------------------------------------------------------------------
+    def compute_genome(self, y: int, x: int) -> np.ndarray:
+        """
+        Compute hybrid genome for a cell at position (y, x).
+
+        Returns 12-dimensional genome combining:
+        - Neural fingerprint (8-dim): Statistical features from w1, w2
+        - Chemical affinity (4-dim): Species chemical preferences
+
+        Args:
+            y: Row position
+            x: Column position
+
+        Returns:
+            12-dimensional numpy array
+        """
+        if not self.alive[y, x]:
+            return None
+
+        # Get neural network weights for this cell
+        w1_cell = self.w1[y, x]  # [INPUT_SIZE, MAX_HIDDEN_SIZE]
+        w2_cell = self.w2[y, x]  # [MAX_HIDDEN_SIZE, NUM_ACTIONS]
+
+        # Get species info
+        sp_id = self.species[y, x].item()
+        hidden_size = SPECIES_CONFIG[sp_id]['hidden_size']
+        chemical_affinity = SPECIES_CONFIG[sp_id]['chemical_affinity']
+
+        # Compute hybrid genome
+        return get_full_genome(w1_cell, w2_cell, hidden_size, chemical_affinity)
+
+    def compute_all_genomes(self) -> dict:
+        """
+        Compute genomes for all alive cells.
+
+        Returns:
+            Dictionary mapping (y, x) positions to genome vectors
+        """
+        genomes = {}
+        alive_positions = self.alive.nonzero(as_tuple=False)
+
+        for pos in alive_positions:
+            y, x = pos[0].item(), pos[1].item()
+            genome = self.compute_genome(y, x)
+            if genome is not None:
+                genomes[(y, x)] = genome
+
+        return genomes
+
+    def update_species_colors_from_genome(self):
+        """
+        Update species colors based on average genome of population.
+
+        This creates genome-based coloring where similar genomes have similar colors.
+        Can be called periodically to update visualization based on evolution.
+        """
+        # Compute genome for each species (average of all members)
+        species_genomes = {}
+
+        for sp_id in range(len(SPECIES_CONFIG)):
+            if SPECIES_CONFIG[sp_id].get('extinct', False):
+                continue
+
+            # Find all cells of this species
+            species_mask = (self.species == sp_id) & self.alive
+            if not species_mask.any():
+                continue
+
+            # Sample up to 100 cells for efficiency
+            positions = species_mask.nonzero(as_tuple=False)
+            if len(positions) > 100:
+                indices = torch.randperm(len(positions))[:100]
+                positions = positions[indices]
+
+            # Compute average genome
+            genomes = []
+            for pos in positions:
+                y, x = pos[0].item(), pos[1].item()
+                genome = self.compute_genome(y, x)
+                if genome is not None:
+                    genomes.append(genome)
+
+            if genomes:
+                avg_genome = np.mean(genomes, axis=0)
+                species_genomes[sp_id] = avg_genome
+
+                # Update color based on genome
+                new_color = genome_to_color(avg_genome)
+                SPECIES_CONFIG[sp_id]['color'] = new_color
+
+        return species_genomes
 
     # -------------------------------------------------------------------------
     # Initialization
@@ -771,6 +1001,10 @@ class GPULifeGame:
         self._update_best_network()
         if self.generation > 0 and self.generation % SAVE_INTERVAL == 0:
             self._save_best_weights()
+
+        # Update species colors based on genome (if enabled)
+        if GENOME_BASED_COLOR and self.generation > 0 and self.generation % GENOME_COLOR_UPDATE_INTERVAL == 0:
+            self.update_species_colors_from_genome()
 
         self.generation += 1
 

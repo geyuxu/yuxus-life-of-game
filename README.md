@@ -106,6 +106,19 @@ python pygame_renderer.py
 - **Emergent Behavior**: Chemical fields create "strength zones" that affect combat outcomes
 - **Neural Sensing**: Networks receive chemical concentrations as additional inputs
 
+### Genome-Based Visualization (Scheme C: Hybrid Genome)
+- **12-Dimensional Genome**: Each organism has a unique genome vector combining:
+  - Neural fingerprint (8-dim): Statistical features extracted from neural network weights (mean, std, abs_mean, max for each layer)
+  - Chemical affinity (4-dim): Evolvable preferences for secreting different chemicals
+- **Genome-to-Color Mapping**: Species colors are dynamically generated from their average genome
+  - Similar genomes produce similar colors in HSV space
+  - Color evolves continuously as neural networks and chemical preferences evolve
+  - Creates intuitive visual clustering of genetically related species
+- **Soft Transition**: Genome system coexists with discrete species IDs
+  - Species IDs still used for game mechanics (backwards compatible)
+  - Genome used only for visualization (can be toggled on/off)
+  - Updates every 50 generations to reflect evolutionary changes
+
 ### Neural Network
 - **Input (24 neurons)**:
   - 8 neighbor energy levels
@@ -150,6 +163,10 @@ DOMINANCE_THRESHOLD = 0.75
 SPLIT_MUTATION_RATE = 0.3
 BLOB_CHECK_INTERVAL = 100
 
+# Genome-based Visualization
+GENOME_BASED_COLOR = True
+GENOME_COLOR_UPDATE_INTERVAL = 50
+
 # Reinforcement Learning
 RL_LEARNING_RATE = 0.01
 REWARD_EAT_PREY = 2.0
@@ -181,7 +198,19 @@ digital-primordial-soup/
 
 ## Version History
 
-### v1.2-professional-viz (current)
+### v1.4-genome-visualization (current)
+- Genome-based color system (Scheme C: Hybrid Genome)
+- 12-dimensional genome: neural fingerprint (8-dim) + chemical affinity (4-dim)
+- Dynamic genome-to-color mapping in HSV space
+- Species colors evolve continuously based on neural network and chemical evolution
+- Soft transition: genome visualization coexists with discrete species IDs
+
+### v1.3-async-saving
+- Asynchronous model saving to eliminate stuttering
+- Background worker thread for non-blocking torch.save() operations
+- Queue-based system with maxsize=2 to prevent memory issues
+
+### v1.2-professional-viz
 - Web interface with Plotly Dash (real-time dashboard)
 - Pygame high-performance renderer (60+ FPS)
 - Chemical field heatmap visualization (4 overlays)
@@ -281,6 +310,19 @@ python pygame_renderer.py
 - **衰减**：化学物质自然降解（每步 5%）
 - **涌现行为**：化学场创建影响战斗结果的"强度区域"
 - **神经感知**：神经网络接收化学浓度作为额外输入
+
+### 基因组可视化（方案 C：混合基因组）
+- **12 维基因组**：每个生物具有独特的基因组向量，结合：
+  - 神经指纹（8 维）：从神经网络权重提取的统计特征（每层的均值、标准差、绝对均值、最大值）
+  - 化学亲和力（4 维）：分泌不同化学物质的可进化偏好
+- **基因组到颜色映射**：物种颜色根据其平均基因组动态生成
+  - 相似基因组在 HSV 空间产生相似颜色
+  - 颜色随神经网络和化学偏好的进化而连续演变
+  - 创建遗传相关物种的直观视觉聚类
+- **软过渡**：基因组系统与离散物种 ID 共存
+  - 物种 ID 仍用于游戏机制（向后兼容）
+  - 基因组仅用于可视化（可切换开关）
+  - 每 50 代更新以反映进化变化
 
 ### 进化机制
 1. **遗传**：后代继承父代神经网络和化学亲和力 + 小变异
