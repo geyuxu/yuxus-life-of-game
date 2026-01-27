@@ -47,7 +47,7 @@ print(f"Using device: {DEVICE}")
 # SIMULATION PARAMETERS
 # =============================================================================
 # Grid and energy
-GRID_SIZE = 300 #ARGS.grid
+GRID_SIZE = 100 #ARGS.grid
 INITIAL_ENERGY = 30.0
 MAX_ENERGY = 100.0
 MOVE_COST = 0.2
@@ -55,8 +55,9 @@ CROWDING_THRESHOLD = 4
 CROWDING_PENALTY = 0.5
 
 # Species configuration
-INITIAL_NUM_SPECIES = 5
+INITIAL_NUM_SPECIES = 3
 MAX_SPECIES = 500
+MAX_ACTIVE_SPECIES = 50  # Maximum number of active (non-extinct) species to prevent performance issues
 SPECIES_METABOLISM = 0.1
 SPECIES_REPRO_THRESHOLD = 20
 SPECIES_REPRO_COST = 8
@@ -68,20 +69,21 @@ MAX_HIDDEN_SIZE = 240       # Maximum hidden layer size
 MIN_HIDDEN_SIZE = 4         # Minimum hidden layer size
 
 # Random mutation
-MUTATION_INTERVAL = 10      # Check for random mutation every N generations
-RANDOM_MUTATION_CHANCE = 0.1  # Probability per species per check
+MUTATION_INTERVAL = 100     # Check for random mutation every N generations (increased to reduce split frequency)
+RANDOM_MUTATION_CHANCE = 0.05  # Probability per species per check (reduced to slow down speciation)
 
 # Species recycling
 EXTINCT_RECYCLE_DELAY = 50  # Generations before extinct species slot can be reused
 
 # Blob-based speciation
 BLOB_SEPARATION_DELAY = 0   # Generations of separation before blob becomes new species (0 = immediate)
-BLOB_CHECK_INTERVAL = 100   # Check for blob separation every N generations
+BLOB_CHECK_INTERVAL = 200   # Check for blob separation every N generations (increased to reduce overhead)
 
 # Performance tuning
 HISTORY_WINDOW = 1000       # Keep only last N generations in history (0 = unlimited)
 RENDER_INTERVAL = 1         # Render every N frames (increase for faster simulation)
 CHART_UPDATE_INTERVAL = 5   # Update charts every N frames (reduces matplotlib overhead)
+VERBOSE_SPECIATION = False  # Print detailed logs for each speciation event (can slow down performance)
 
 # Combat
 ATTACK_BONUS = 1.2  # Energy multiplier when eating prey
@@ -100,7 +102,7 @@ SPLIT_MUTATION_RATE = 0.3   # Higher mutation during speciation
 
 # Genome-based visualization (Scheme C: Hybrid Genome)
 GENOME_BASED_COLOR = True   # Enable genome-to-color mapping (similar genomes = similar colors)
-GENOME_COLOR_UPDATE_INTERVAL = 50  # Update species colors every N generations
+GENOME_COLOR_UPDATE_INTERVAL = 200  # Update species colors every N generations (increased to reduce overhead)
 
 # Reinforcement Learning
 RL_LEARNING_RATE = 0.01
@@ -205,6 +207,11 @@ def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREME
     Returns:
         The ID of the new species, or None if max species reached
     """
+    # Check if we've reached the maximum number of active species
+    active_count = sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])
+    if active_count >= MAX_ACTIVE_SPECIES:
+        return None  # Prevent performance issues from too many active species
+
     # First, try to recycle an extinct species slot
     recycled_id = find_recyclable_species(current_gen)
 
@@ -1452,16 +1459,17 @@ class GPULifeGame:
             parent_name = SPECIES_CONFIG[sp_id]['name']
             new_name = SPECIES_CONFIG[new_species_id]['name']
 
-            if BLOB_SEPARATION_DELAY > 0:
-                separation_duration = self.generation - self.blob_separation_tracker[sp_id]
-                print(f"\n[ISOLATION] Geographic separation in {parent_name}")
-                print(f"            Blob split after {separation_duration} generations apart")
-            else:
-                print(f"\n[ISOLATION] Geographic separation detected in {parent_name}")
-                print(f"            Immediate speciation triggered")
+            if VERBOSE_SPECIATION:
+                if BLOB_SEPARATION_DELAY > 0:
+                    separation_duration = self.generation - self.blob_separation_tracker[sp_id]
+                    print(f"\n[ISOLATION] Geographic separation in {parent_name}")
+                    print(f"            Blob split after {separation_duration} generations apart")
+                else:
+                    print(f"\n[ISOLATION] Geographic separation detected in {parent_name}")
+                    print(f"            Immediate speciation triggered")
 
-            print(f"            New species: {new_name} ({num_converted} cells)")
-            print(f"            Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
+                print(f"            New species: {new_name} ({num_converted} cells)")
+                print(f"            Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
 
             # Handle history for new species
             if new_species_id < len(self.history['species']):
@@ -1511,10 +1519,11 @@ class GPULifeGame:
             new_hidden = SPECIES_CONFIG[new_species_id]['hidden_size']
             delta_str = f"+{hidden_delta}" if hidden_delta > 0 else str(hidden_delta)
 
-            print(f"\n[MUTATION] Random mutation in {parent_name}")
-            print(f"           New species: {new_name}")
-            print(f"           Hidden neurons: {parent_hidden} -> {new_hidden} ({delta_str})")
-            print(f"           Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
+            if VERBOSE_SPECIATION:
+                print(f"\n[MUTATION] Random mutation in {parent_name}")
+                print(f"           New species: {new_name}")
+                print(f"           Hidden neurons: {parent_hidden} -> {new_hidden} ({delta_str})")
+                print(f"           Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
 
             # Handle history tracking for new/recycled species
             if new_species_id < len(self.history['species']):
@@ -1527,7 +1536,8 @@ class GPULifeGame:
             if len(blobs) >= 2:
                 # Multiple blobs: convert the second largest blob
                 num_converted = self._split_species_by_blob(sp_id, new_species_id, blob_idx=1)
-                print(f"           Blob of {num_converted} cells becomes {new_name}")
+                if VERBOSE_SPECIATION:
+                    print(f"           Blob of {num_converted} cells becomes {new_name}")
             elif len(blobs) == 1 and len(blobs[0]) > 1:
                 # Single blob: split it in half spatially
                 blob = blobs[0]
@@ -1549,7 +1559,8 @@ class GPULifeGame:
                     mutation_w2 = torch.randn_like(self.w2[split_r, split_c]) * SPLIT_MUTATION_RATE
                     self.w1[split_r, split_c] += mutation_w1
                     self.w2[split_r, split_c] += mutation_w2
-                    print(f"           {len(split_indices)} cells (edge of blob) become {new_name}")
+                    if VERBOSE_SPECIATION:
+                        print(f"           {len(split_indices)} cells (edge of blob) become {new_name}")
 
     def _check_and_split_dominant_species(self):
         """Split dominant species to maintain ecosystem diversity (CUDA optimized)."""
