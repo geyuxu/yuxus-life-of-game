@@ -15,6 +15,7 @@ Controls:
 - S: Save best network manually
 - C: Toggle chemical overlay
 - G: Toggle grid
+- H: Toggle genome heatmap
 - +/-: Adjust simulation speed
 - Mouse wheel: Zoom
 - Click+Drag: Pan camera
@@ -68,6 +69,7 @@ class PyGameRenderer:
         # View settings
         self.show_chemical = False
         self.show_grid = False  # Grid disabled by default (press G to toggle)
+        self.show_genome_heatmap = False  # Genome heatmap disabled by default (press H to toggle)
         self.chemical_alpha = 0.5
         self.simulation_speed = 1  # Steps per frame
 
@@ -425,6 +427,7 @@ class PyGameRenderer:
             f"Zoom: {self.camera_zoom:.2f}x",
             f"Chemical: {'ON' if self.show_chemical else 'OFF'}",
             f"Grid: {'ON' if self.show_grid else 'OFF'}",
+            f"Heatmap: {'ON' if self.show_genome_heatmap else 'OFF'}",
         ]
 
         # Add validation stats if available
@@ -498,6 +501,71 @@ class PyGameRenderer:
                 self.stats_surface.blit(text, (10, y_offset))
                 y_offset += 22
 
+        # Genome Heatmap (if enabled)
+        if self.show_genome_heatmap and total_pop > 0:
+            y_offset += 10
+            title = self.font_medium.render('Genome Distribution', True, COLOR_TEXT)
+            self.stats_surface.blit(title, (10, y_offset))
+            y_offset += 30
+
+            # Get all alive genomes
+            alive_mask = self.game.alive.cpu().numpy()
+            genomes = self.game.genome.cpu().numpy()
+            alive_genomes = genomes[alive_mask]
+
+            if len(alive_genomes) > 0:
+                # Calculate statistics for each of the 12 genome dimensions
+                labels = ['W1μ', 'W1σ', 'W1|μ|', 'W1max', 'W2μ', 'W2σ', 'W2|μ|', 'W2max', 'C1', 'C2', 'C3', 'C4']
+
+                for dim_idx in range(12):
+                    values = alive_genomes[:, dim_idx]
+                    mean_val = np.mean(values)
+                    std_val = np.std(values)
+
+                    # Draw label
+                    label_text = self.font_small.render(f"{labels[dim_idx]:5s}", True, COLOR_TEXT)
+                    self.stats_surface.blit(label_text, (10, y_offset))
+
+                    # Draw horizontal bar showing range and mean
+                    bar_x = 60
+                    bar_width = 200
+                    bar_height = 12
+
+                    # Background bar (full range)
+                    bar_rect = pygame.Rect(bar_x, y_offset + 2, bar_width, bar_height)
+                    pygame.draw.rect(self.stats_surface, (40, 40, 40), bar_rect)
+
+                    # Value bar (relative to range [-3, 3] typical for normalized values)
+                    val_range = 6.0  # Range from -3 to +3
+                    val_offset = 3.0  # Offset to make 0 the center
+
+                    # Draw mean position
+                    mean_pos = int(bar_x + (mean_val + val_offset) / val_range * bar_width)
+                    mean_pos = max(bar_x, min(bar_x + bar_width, mean_pos))
+
+                    # Color based on dimension type
+                    if dim_idx < 8:  # Neural fingerprint
+                        color = (100, 150, 255)  # Blue
+                    else:  # Chemical affinity
+                        color = (255, 150, 100)  # Orange
+
+                    pygame.draw.line(self.stats_surface, color, (mean_pos, y_offset), (mean_pos, y_offset + bar_height + 4), 2)
+
+                    # Draw std deviation range
+                    std_left = int(bar_x + (mean_val - std_val + val_offset) / val_range * bar_width)
+                    std_right = int(bar_x + (mean_val + std_val + val_offset) / val_range * bar_width)
+                    std_left = max(bar_x, min(bar_x + bar_width, std_left))
+                    std_right = max(bar_x, min(bar_x + bar_width, std_right))
+
+                    std_rect = pygame.Rect(std_left, y_offset + 4, max(1, std_right - std_left), bar_height - 4)
+                    pygame.draw.rect(self.stats_surface, (60, 60, 60), std_rect)
+
+                    # Draw mean value text
+                    val_text = self.font_small.render(f"{mean_val:.2f}", True, COLOR_TEXT)
+                    self.stats_surface.blit(val_text, (bar_x + bar_width + 10, y_offset))
+
+                    y_offset += 18
+
         # Show emergent species groups
         y_offset += 10
         title = self.font_medium.render('Genome Clusters', True, COLOR_TEXT)
@@ -561,6 +629,9 @@ class PyGameRenderer:
                 elif event.key == pygame.K_g:
                     self.show_grid = not self.show_grid
                     print(f"Grid: {'ON' if self.show_grid else 'OFF'}")
+                elif event.key == pygame.K_h:
+                    self.show_genome_heatmap = not self.show_genome_heatmap
+                    print(f"Genome heatmap: {'ON' if self.show_genome_heatmap else 'OFF'}")
                 elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                     self.simulation_speed = min(10, self.simulation_speed + 1)
                     print(f"Speed: {self.simulation_speed}x")
