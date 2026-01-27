@@ -238,9 +238,49 @@ yuxus-game-of-life/
 ├── config.py        # All configurable parameters
 ├── evolution.py     # Core evolution engine (GPULifeGame class)
 ├── main.py          # Pygame renderer (entry point)
+├── ab_test.py       # A/B testing framework
 ├── best_brain.pt    # Saved neural network weights (auto-generated)
+├── checkpoint.pt    # Complete simulation checkpoint (Ctrl+S to save)
 └── README.md
 ```
+
+## A/B Testing Framework
+
+Compare two different configurations side-by-side to find optimal parameters:
+
+```bash
+# Run A/B test comparing mutation rate vs RL learning rate
+python3 ab_test.py --generations 1000 --output results.json
+
+# Example output:
+# Gen  100 | A: Pop=5234 Fit= 234.1 Div=1.42 | B: Pop=5891 Fit= 289.3 Div=1.38
+# Gen  200 | A: Pop=6012 Fit= 341.2 Div=1.35 | B: Pop=7234 Fit= 412.5 Div=1.29
+```
+
+**Built-in Test**: High Mutation + Low RL vs Low Mutation + High RL
+
+**Customize your own test** by editing `ab_test.py`:
+
+```python
+config_a = {
+    'MUTATION_RATE': 0.2,
+    'RL_LEARNING_RATE': 0.005,
+}
+
+config_b = {
+    'MUTATION_RATE': 0.05,
+    'RL_LEARNING_RATE': 0.02,
+}
+```
+
+**Metrics Tracked**:
+- Population size
+- Average fitness (multi-objective)
+- Genetic diversity
+- Trained lineage ratio
+- Average energy, lifetime, reproduction
+
+Results saved to JSON with full metric history for later analysis.
 
 ## Understanding the Validation Results
 
