@@ -170,7 +170,8 @@ class PyGameRenderer:
 
         # Draw organization boundaries (genome-based)
         # Check 4-connected neighbors and draw boundary lines where genomes differ
-        boundary_color = (80, 80, 80)  # Dark gray boundaries
+        boundary_color = (255, 50, 50)  # Bright red boundaries - very visible!
+        boundary_width = 3  # Thicker lines for better visibility
         for y in range(self.game.size):
             for x in range(self.game.size):
                 if not alive[y, x]:
@@ -190,7 +191,7 @@ class PyGameRenderer:
                         line_y_start = int(sy)
                         line_y_end = int(sy + self.cell_size)
                         pygame.draw.line(self.main_surface, boundary_color,
-                                       (line_x, line_y_start), (line_x, line_y_end), 2)
+                                       (line_x, line_y_start), (line_x, line_y_end), boundary_width)
 
                 # Check bottom neighbor
                 y_bottom = (y + 1) % self.game.size
@@ -203,7 +204,7 @@ class PyGameRenderer:
                         line_x_end = int(sx + self.cell_size)
                         line_y = int(sy + self.cell_size)
                         pygame.draw.line(self.main_surface, boundary_color,
-                                       (line_x_start, line_y), (line_x_end, line_y), 2)
+                                       (line_x_start, line_y), (line_x_end, line_y), boundary_width)
 
         # Chemical overlay
         if self.show_chemical:

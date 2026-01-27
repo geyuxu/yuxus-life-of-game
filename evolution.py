@@ -912,10 +912,11 @@ class GPULifeGame:
             # Enclosed spaces (≥6 similar neighbors) get reproduction bonus
             # This encourages forming protective structures
             is_enclosed = target_enclosure >= 6
-            reproduction_priority = torch.where(is_enclosed, 0.7, 0.5)  # Higher chance if enclosed
+            reproduction_threshold = torch.where(is_enclosed, 0.3, 0.5)  # LOWER threshold = easier to pass
 
             can_reproduce = is_reproduce & target_empty & (self.energy >= SPECIES_REPRO_THRESHOLD)
-            winner = can_reproduce & (rand_shared > reproduction_priority)
+            winner = can_reproduce & (rand_shared > reproduction_threshold)  # rand > 0.3 = 70% chance (enclosed)
+                                                                                # rand > 0.5 = 50% chance (open)
 
             if not winner.any():
                 continue
