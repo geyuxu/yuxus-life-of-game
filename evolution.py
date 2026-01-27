@@ -244,6 +244,88 @@ def genetic_similarity(genome1: np.ndarray, genome2: np.ndarray) -> float:
 
 
 # =============================================================================
+# EXPERIENCE REPLAY BUFFER
+# =============================================================================
+class ReplayBuffer:
+    """
+    Experience replay buffer for reinforcement learning.
+
+    Stores experiences (input, hidden, action, reward) and allows sampling
+    random batches for training, which improves learning stability and efficiency.
+    """
+
+    def __init__(self, capacity: int, input_size: int, hidden_size: int, device):
+        """
+        Initialize replay buffer.
+
+        Args:
+            capacity: Maximum number of experiences to store
+            input_size: Dimension of input vectors
+            hidden_size: Dimension of hidden layer
+            device: PyTorch device (cuda/mps/cpu)
+        """
+        self.capacity = capacity
+        self.device = device
+        self.position = 0
+        self.size = 0
+
+        # Pre-allocate buffers
+        self.inputs = torch.zeros((capacity, input_size), dtype=torch.float32, device=device)
+        self.hiddens = torch.zeros((capacity, hidden_size), dtype=torch.float32, device=device)
+        self.actions = torch.zeros(capacity, dtype=torch.int64, device=device)
+        self.rewards = torch.zeros(capacity, dtype=torch.float32, device=device)
+
+    def push(self, inputs_batch, hiddens_batch, actions_batch, rewards_batch):
+        """
+        Add a batch of experiences to the buffer.
+
+        Args:
+            inputs_batch: Tensor of inputs [N, input_size]
+            hiddens_batch: Tensor of hidden states [N, hidden_size]
+            actions_batch: Tensor of actions [N]
+            rewards_batch: Tensor of rewards [N]
+        """
+        batch_size = len(inputs_batch)
+
+        # Handle buffer overflow: circular overwrite
+        for i in range(batch_size):
+            idx = self.position % self.capacity
+            self.inputs[idx] = inputs_batch[i]
+            self.hiddens[idx] = hiddens_batch[i]
+            self.actions[idx] = actions_batch[i]
+            self.rewards[idx] = rewards_batch[i]
+            self.position += 1
+            self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size: int):
+        """
+        Sample a random batch of experiences.
+
+        Args:
+            batch_size: Number of experiences to sample
+
+        Returns:
+            Tuple of (inputs, hiddens, actions, rewards) tensors
+        """
+        if self.size == 0:
+            return None
+
+        # Sample random indices
+        batch_size = min(batch_size, self.size)
+        indices = torch.randint(0, self.size, (batch_size,), device=self.device)
+
+        return (
+            self.inputs[indices],
+            self.hiddens[indices],
+            self.actions[indices],
+            self.rewards[indices]
+        )
+
+    def __len__(self):
+        return self.size
+
+
+# =============================================================================
 # SIMULATION ENGINE
 # =============================================================================
 class GPULifeGame:
@@ -316,6 +398,17 @@ class GPULifeGame:
         self._buffer_neighbor_w2_sum = torch.zeros((size, size, MAX_HIDDEN_SIZE, NUM_ACTIONS), dtype=torch.float32, device=DEVICE)
         self._buffer_neighbor_trained_gen_sum = torch.zeros((size, size), dtype=torch.int32, device=DEVICE)
         self._buffer_neighbor_trained_gen_count = torch.zeros((size, size), dtype=torch.int32, device=DEVICE)
+
+        # Experience replay buffer for reinforcement learning
+        if RL_USE_REPLAY:
+            self.replay_buffer = ReplayBuffer(
+                capacity=RL_REPLAY_BUFFER_SIZE,
+                input_size=INPUT_SIZE,
+                hidden_size=MAX_HIDDEN_SIZE,
+                device=DEVICE
+            )
+        else:
+            self.replay_buffer = None
 
         # Load saved weights if available
         self.saved_w1, self.saved_w2, self.saved_hidden_size = self._load_saved_weights()
@@ -1090,7 +1183,12 @@ class GPULifeGame:
             is_reproduce = is_reproduce & ~winner
 
     def _apply_rl_update(self):
-        """Apply policy gradient updates based on rewards (CUDA optimized - fully vectorized)."""
+        """
+        Apply policy gradient updates based on rewards.
+
+        If experience replay is enabled, stores experiences in buffer and trains
+        on random samples. Otherwise, uses immediate updates (original behavior).
+        """
         has_reward = self.alive & (self.reward != 0)
         if not has_reward.any():
             return
@@ -1102,36 +1200,77 @@ class GPULifeGame:
         hidden = self.last_hidden[reward_mask]  # [N, H]
         inputs = self.last_inputs[reward_mask]  # [N, I]
 
-        # Limit to avoid memory issues
-        n = min(len(rewards), 2000)
-        if n < len(rewards):
-            perm = torch.randperm(len(rewards), device=DEVICE)[:n]
-            rewards = rewards[perm]
-            actions = actions[perm]
-            hidden = hidden[perm]
-            inputs = inputs[perm]
-            # Get corresponding positions
-            positions = reward_mask.nonzero(as_tuple=False)[perm]
-        else:
-            positions = reward_mask.nonzero(as_tuple=False)
+        # Store experiences in replay buffer if enabled
+        if RL_USE_REPLAY and self.replay_buffer is not None:
+            # Limit batch size for storage
+            n_store = min(len(rewards), 1000)
+            if n_store < len(rewards):
+                perm = torch.randperm(len(rewards), device=DEVICE)[:n_store]
+                self.replay_buffer.push(
+                    inputs[perm],
+                    hidden[perm],
+                    actions[perm],
+                    rewards[perm]
+                )
+            else:
+                self.replay_buffer.push(inputs, hidden, actions, rewards)
 
-        rows, cols = positions[:, 0], positions[:, 1]
+            # Sample from replay buffer for training
+            if len(self.replay_buffer) >= RL_REPLAY_BATCH_SIZE:
+                sample = self.replay_buffer.sample(RL_REPLAY_BATCH_SIZE)
+                if sample is not None:
+                    inputs, hidden, actions, rewards = sample
+                    # For replay learning, we don't have position info, so update randomly selected cells
+                    # Instead, we'll use a global weight update approach
+                    positions = None  # Indicate we're using replay samples
+            else:
+                # Buffer not full yet, use current experiences
+                positions = reward_mask.nonzero(as_tuple=False)
+        else:
+            # Original behavior: limit to avoid memory issues
+            n = min(len(rewards), 2000)
+            if n < len(rewards):
+                perm = torch.randperm(len(rewards), device=DEVICE)[:n]
+                rewards = rewards[perm]
+                actions = actions[perm]
+                hidden = hidden[perm]
+                inputs = inputs[perm]
+                positions = reward_mask.nonzero(as_tuple=False)[perm]
+            else:
+                positions = reward_mask.nonzero(as_tuple=False)
 
         # Vectorized w2 update: w2[r, c, :, action] += lr * reward * h
         # Create one-hot action vectors [N, NUM_ACTIONS]
         action_onehot = F.one_hot(actions, NUM_ACTIONS).float()  # [N, A]
         # delta_w2[n, h, a] = lr * reward[n] * hidden[n, h] * onehot[n, a]
         delta_w2 = RL_LEARNING_RATE * rewards.view(-1, 1, 1) * hidden.unsqueeze(-1) * action_onehot.unsqueeze(1)
-        # Apply updates
-        self.w2[rows, cols] += delta_w2
 
         # Vectorized w1 update (simplified: update all neurons proportional to activation)
         # delta_w1[n, i, h] = lr * 0.1 * reward[n] * input[n, i] * sign(h[n, h]) * (|h| > 0.1)
         h_sign = torch.sign(hidden)  # [N, H]
         h_active = (hidden.abs() > 0.1).float()  # [N, H]
-        # delta_w1[n, i, h] = lr * 0.1 * reward[n] * input[n, i] * sign[n, h] * active[n, h]
         delta_w1 = RL_LEARNING_RATE * 0.1 * rewards.view(-1, 1, 1) * inputs.unsqueeze(-1) * (h_sign * h_active).unsqueeze(1)
-        self.w1[rows, cols] += delta_w1
+
+        # Apply updates
+        if positions is not None:
+            # Direct update to specific cells
+            rows, cols = positions[:, 0], positions[:, 1]
+            self.w2[rows, cols] += delta_w2
+            self.w1[rows, cols] += delta_w1
+        else:
+            # Replay learning: apply averaged updates to all alive cells
+            # This distributes learning across population
+            avg_delta_w2 = delta_w2.mean(dim=0, keepdim=True)  # [1, H, A]
+            avg_delta_w1 = delta_w1.mean(dim=0, keepdim=True)  # [1, I, H]
+            alive_positions = self.alive.nonzero(as_tuple=False)
+            if len(alive_positions) > 0:
+                # Apply to a random subset of alive cells
+                n_update = min(len(alive_positions), RL_REPLAY_BATCH_SIZE)
+                update_perm = torch.randperm(len(alive_positions), device=DEVICE)[:n_update]
+                update_positions = alive_positions[update_perm]
+                update_rows, update_cols = update_positions[:, 0], update_positions[:, 1]
+                self.w2[update_rows, update_cols] += avg_delta_w2.expand(n_update, -1, -1)
+                self.w1[update_rows, update_cols] += avg_delta_w1.expand(n_update, -1, -1)
 
         self.reward.fill_(0)
 

@@ -101,6 +101,11 @@ REWARD_EAT_PREY = 2.0          # Reward for successful hunt
 REWARD_SURVIVE_ATTACK = 1.0    # Reward for escaping
 REWARD_REPRODUCE = 1.5         # Reward for reproduction
 
+# Experience Replay
+RL_REPLAY_BUFFER_SIZE = 10000  # Maximum experiences to store
+RL_REPLAY_BATCH_SIZE = 256     # Batch size for replay sampling
+RL_USE_REPLAY = True           # Enable experience replay (improves learning stability)
+
 # ==============================================================================
 # FITNESS FUNCTION
 # ==============================================================================
