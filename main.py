@@ -407,22 +407,29 @@ class GPULifeGame:
                 gen = checkpoint.get('generation', 0)
                 print(f"Loaded saved network: fitness={fitness}, hidden={hidden_size}, from gen {gen}")
 
-                # Pad or truncate weights to match MAX_HIDDEN_SIZE
-                saved_hidden = w1.shape[-1]
+                # Adapt weights to match current INPUT_SIZE and MAX_HIDDEN_SIZE
+                saved_input_size = w1.shape[0]
+                saved_hidden = w1.shape[1]
+
+                # Create new w1 with current dimensions
+                new_w1 = torch.randn((INPUT_SIZE, MAX_HIDDEN_SIZE), device=DEVICE) * 0.1
+
+                # Copy overlapping region from saved weights
+                copy_input = min(saved_input_size, INPUT_SIZE)
+                copy_hidden = min(saved_hidden, MAX_HIDDEN_SIZE)
+                new_w1[:copy_input, :copy_hidden] = w1[:copy_input, :copy_hidden].to(DEVICE)
+
+                if saved_input_size != INPUT_SIZE or saved_hidden != MAX_HIDDEN_SIZE:
+                    print(f"  Adapting w1: [{saved_input_size}, {saved_hidden}] -> [{INPUT_SIZE}, {MAX_HIDDEN_SIZE}]")
+
+                # Adapt w2: [saved_hidden, NUM_ACTIONS] -> [MAX_HIDDEN_SIZE, NUM_ACTIONS]
+                new_w2 = torch.randn((MAX_HIDDEN_SIZE, NUM_ACTIONS), device=DEVICE) * 0.1
+                new_w2[:copy_hidden, :] = w2[:copy_hidden, :].to(DEVICE)
+
                 if saved_hidden != MAX_HIDDEN_SIZE:
-                    print(f"  Adapting network: {saved_hidden} -> {MAX_HIDDEN_SIZE} neurons")
-                    # Pad w1: [INPUT_SIZE, saved_hidden] -> [INPUT_SIZE, MAX_HIDDEN_SIZE]
-                    new_w1 = torch.zeros((INPUT_SIZE, MAX_HIDDEN_SIZE), device=DEVICE)
-                    copy_size = min(saved_hidden, MAX_HIDDEN_SIZE)
-                    new_w1[:, :copy_size] = w1[:, :copy_size].to(DEVICE)
-                    w1 = new_w1
+                    print(f"  Adapting w2: [{saved_hidden}, {NUM_ACTIONS}] -> [{MAX_HIDDEN_SIZE}, {NUM_ACTIONS}]")
 
-                    # Pad w2: [saved_hidden, NUM_ACTIONS] -> [MAX_HIDDEN_SIZE, NUM_ACTIONS]
-                    new_w2 = torch.zeros((MAX_HIDDEN_SIZE, NUM_ACTIONS), device=DEVICE)
-                    new_w2[:copy_size, :] = w2[:copy_size, :].to(DEVICE)
-                    w2 = new_w2
-
-                return w1.to(DEVICE), w2.to(DEVICE), hidden_size
+                return new_w1, new_w2, hidden_size
             except Exception as e:
                 print(f"Warning: Failed to load weights: {e}")
                 return None, None, SPECIES_HIDDEN_SIZE
