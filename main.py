@@ -151,7 +151,8 @@ class PyGameRenderer:
         # Get data from game
         alive = self.game.alive.cpu().numpy()
         energy = self.game.energy.cpu().numpy()
-        genome = self.game.genome.cpu().numpy()
+        genome = self.game.genome.cpu().numpy()  # Still needed for neighbor similarity checks
+        colors = self.game.cell_colors  # Use cached colors instead of recomputing
 
         # Scaling factor for high-res rendering
         scale = self.render_scale
@@ -162,9 +163,9 @@ class PyGameRenderer:
                 if not alive[y, x]:
                     continue
 
-                # Get genome-based color
-                cell_genome = genome[y, x]
-                base_color = genome_to_color(cell_genome)
+                # Get cached genome-based color (updated periodically for efficiency)
+                base_color = colors[y, x]
+                cell_genome = genome[y, x]  # Needed for neighbor similarity checks
 
                 # Modulate by energy (brightness)
                 energy_norm = min(1.0, energy[y, x] / 100.0)

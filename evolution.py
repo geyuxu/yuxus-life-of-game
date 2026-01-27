@@ -292,6 +292,11 @@ class GPULifeGame:
         # Genome (12-dim fingerprint: 8 neural + 4 chemical)
         self.genome = torch.zeros((size, size, 12), dtype=torch.float32, device=DEVICE)
 
+        # Color cache for rendering optimization (RGB values [0-1])
+        # Updated periodically from genomes to avoid recomputing every frame
+        self.cell_colors = np.zeros((size, size, 3), dtype=np.float32)
+        self.color_cache_dirty = True  # Flag to trigger color update
+
         # Position indices for vectorized operations
         self.rows = torch.arange(size, device=DEVICE).view(-1, 1).expand(size, size)
         self.cols = torch.arange(size, device=DEVICE).view(1, -1).expand(size, size)
@@ -315,6 +320,9 @@ class GPULifeGame:
         # Load saved weights if available
         self.saved_w1, self.saved_w2, self.saved_hidden_size = self._load_saved_weights()
         self._spawn_initial_cells()
+
+        # Initialize color cache for rendering optimization
+        self.update_color_cache()
 
         self.history = {'population': []}
 
@@ -650,6 +658,23 @@ class GPULifeGame:
         # Clamp to prevent overflow
         self.chemicals.clamp_(0, 10.0)
 
+    def update_color_cache(self):
+        """
+        Update color cache from genomes for rendering optimization.
+
+        Called periodically (every GENOME_COLOR_UPDATE_INTERVAL generations)
+        to avoid recomputing genome_to_color() for every cell every frame.
+        """
+        # Convert genomes to numpy for color calculation
+        genomes_np = self.genome.cpu().numpy()
+
+        # Update colors for all cells
+        for y in range(self.size):
+            for x in range(self.size):
+                self.cell_colors[y, x] = genome_to_color(genomes_np[y, x])
+
+        self.color_cache_dirty = False
+
     def step(self):
         """Execute one simulation step (CUDA optimized)."""
         self.is_newborn.fill_(False)
@@ -720,6 +745,10 @@ class GPULifeGame:
         # Print validation report every 200 generations
         if self.generation > 0 and self.generation % 200 == 0:
             self.print_validation_report()
+
+        # Update color cache periodically for rendering optimization
+        if self.generation % GENOME_COLOR_UPDATE_INTERVAL == 0:
+            self.update_color_cache()
 
         self.generation += 1
 
