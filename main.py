@@ -60,6 +60,8 @@ SPECIES_REPRO_COST = 8
 SPECIES_OFFSPRING_ENERGY = 25
 SPECIES_STARVATION = 100
 SPECIES_HIDDEN_SIZE = 8
+HIDDEN_SIZE_INCREMENT = 2  # Neurons added on speciation
+MAX_HIDDEN_SIZE = 240       # Maximum hidden layer size
 
 # Combat
 ATTACK_BONUS = 1.2  # Energy multiplier when eating prey
@@ -139,6 +141,12 @@ def add_new_species(parent_id: int) -> int:
 
     new_config = create_species_config(new_id, new_id + 1, name=new_name)
     new_config['parent'] = parent_id
+
+    # New species gets more hidden neurons (evolution of complexity)
+    parent_hidden = SPECIES_CONFIG[parent_id]['hidden_size']
+    new_hidden = min(parent_hidden + HIDDEN_SIZE_INCREMENT, MAX_HIDDEN_SIZE)
+    new_config['hidden_size'] = new_hidden
+
     SPECIES_CONFIG.append(new_config)
 
     # Update all existing species' prey lists
@@ -152,8 +160,6 @@ def add_new_species(parent_id: int) -> int:
 for i in range(INITIAL_NUM_SPECIES):
     SPECIES_CONFIG.append(create_species_config(i, INITIAL_NUM_SPECIES, name=f'S{i}'))
     SPECIES_CHILD_COUNT[i] = 0
-
-MAX_HIDDEN_SIZE = max(sp['hidden_size'] for sp in SPECIES_CONFIG)
 
 
 # =============================================================================
@@ -186,6 +192,7 @@ class GPULifeGame:
         self.best_fitness = 0
         self.best_w1 = None
         self.best_w2 = None
+        self.best_hidden_size = SPECIES_HIDDEN_SIZE
 
         # Neural network weights (one per cell)
         self.w1 = torch.randn((size, size, INPUT_SIZE, MAX_HIDDEN_SIZE), device=DEVICE) * 0.5
@@ -196,7 +203,7 @@ class GPULifeGame:
         self.cols = torch.arange(size, device=DEVICE).view(1, -1).expand(size, size)
 
         # Load saved weights if available
-        self.saved_w1, self.saved_w2 = self._load_saved_weights()
+        self.saved_w1, self.saved_w2, self.saved_hidden_size = self._load_saved_weights()
         self._spawn_initial_cells()
 
         self.history = {'population': [], 'species': [[] for _ in range(len(SPECIES_CONFIG))]}
@@ -205,35 +212,53 @@ class GPULifeGame:
     # Weight Persistence
     # -------------------------------------------------------------------------
     def _load_saved_weights(self):
-        """Load previously saved neural network weights."""
+        """Load previously saved neural network weights and structure."""
         if os.path.exists(SAVE_FILE):
             try:
                 checkpoint = torch.load(SAVE_FILE, map_location=DEVICE, weights_only=True)
                 w1 = checkpoint['w1']
                 w2 = checkpoint['w2']
+                hidden_size = checkpoint.get('hidden_size', SPECIES_HIDDEN_SIZE)
                 fitness = checkpoint.get('fitness', 0)
                 gen = checkpoint.get('generation', 0)
-                print(f"Loaded saved network: fitness={fitness}, from generation {gen}")
-                return w1, w2
+                print(f"Loaded saved network: fitness={fitness}, hidden={hidden_size}, from gen {gen}")
+
+                # Pad or truncate weights to match MAX_HIDDEN_SIZE
+                saved_hidden = w1.shape[-1]
+                if saved_hidden != MAX_HIDDEN_SIZE:
+                    print(f"  Adapting network: {saved_hidden} -> {MAX_HIDDEN_SIZE} neurons")
+                    # Pad w1: [INPUT_SIZE, saved_hidden] -> [INPUT_SIZE, MAX_HIDDEN_SIZE]
+                    new_w1 = torch.zeros((INPUT_SIZE, MAX_HIDDEN_SIZE), device=DEVICE)
+                    copy_size = min(saved_hidden, MAX_HIDDEN_SIZE)
+                    new_w1[:, :copy_size] = w1[:, :copy_size].to(DEVICE)
+                    w1 = new_w1
+
+                    # Pad w2: [saved_hidden, NUM_ACTIONS] -> [MAX_HIDDEN_SIZE, NUM_ACTIONS]
+                    new_w2 = torch.zeros((MAX_HIDDEN_SIZE, NUM_ACTIONS), device=DEVICE)
+                    new_w2[:copy_size, :] = w2[:copy_size, :].to(DEVICE)
+                    w2 = new_w2
+
+                return w1.to(DEVICE), w2.to(DEVICE), hidden_size
             except Exception as e:
                 print(f"Warning: Failed to load weights: {e}")
-                return None, None
+                return None, None, SPECIES_HIDDEN_SIZE
         else:
             print("No saved weights found, using random initialization")
-            return None, None
+            return None, None, SPECIES_HIDDEN_SIZE
 
     def _save_best_weights(self):
-        """Save the current best neural network weights."""
+        """Save the current best neural network weights and structure."""
         if self.best_w1 is None:
             return
         checkpoint = {
             'w1': self.best_w1.cpu(),
             'w2': self.best_w2.cpu(),
+            'hidden_size': self.best_hidden_size,
             'fitness': self.best_fitness,
             'generation': self.generation,
         }
         torch.save(checkpoint, SAVE_FILE)
-        print(f"Saved best network: fitness={self.best_fitness}, generation {self.generation}")
+        print(f"Saved best network: fitness={self.best_fitness}, hidden={self.best_hidden_size}, gen {self.generation}")
 
     def _update_best_network(self):
         """Find and track the best performing individual."""
@@ -251,6 +276,9 @@ class GPULifeGame:
             self.best_fitness = max_fitness
             self.best_w1 = self.w1[r, c].clone()
             self.best_w2 = self.w2[r, c].clone()
+            # Track the hidden size of the best individual's species
+            sp_id = self.species[r, c].item()
+            self.best_hidden_size = SPECIES_CONFIG[sp_id]['hidden_size']
 
     # -------------------------------------------------------------------------
     # Initialization
@@ -657,8 +685,11 @@ class GPULifeGame:
 
         parent_name = SPECIES_CONFIG[dominant_species]['name']
         new_name = SPECIES_CONFIG[new_species_id]['name']
+        new_hidden = SPECIES_CONFIG[new_species_id]['hidden_size']
+        parent_hidden = SPECIES_CONFIG[dominant_species]['hidden_size']
         print(f"\n[SPECIATION] {parent_name} at {dominance_ratio*100:.1f}% > {DOMINANCE_THRESHOLD*100}%")
         print(f"             {parent_name} splits into {new_name}")
+        print(f"             Hidden neurons: {parent_hidden} -> {new_hidden}")
         print(f"             Total species: {len(SPECIES_CONFIG)}")
 
         self.history['species'].append([0] * len(self.history['population']))
@@ -756,6 +787,7 @@ def print_system_info():
     print(f"  Splits when single species exceeds {DOMINANCE_THRESHOLD*100:.0f}%")
     print(f"  Split mutation rate: {SPLIT_MUTATION_RATE}")
     print(f"  Initial species: {INITIAL_NUM_SPECIES}, Max species: {MAX_SPECIES}")
+    print(f"  Hidden neurons: {SPECIES_HIDDEN_SIZE} -> +{HIDDEN_SIZE_INCREMENT}/split (max {MAX_HIDDEN_SIZE})")
     print(f"\n[Network Persistence]")
     print(f"  Save best network every {SAVE_INTERVAL} generations to: {SAVE_FILE}")
     print(f"  Fitness = lifetime + reproduction_count * 10")
