@@ -79,6 +79,7 @@ BLOB_CHECK_INTERVAL = 25    # Check for blob separation every N generations (hig
 # Performance tuning
 HISTORY_WINDOW = 1000       # Keep only last N generations in history (0 = unlimited)
 RENDER_INTERVAL = 1         # Render every N frames (increase for faster simulation)
+CHART_UPDATE_INTERVAL = 5   # Update charts every N frames (reduces matplotlib overhead)
 
 # Combat
 ATTACK_BONUS = 1.2  # Energy multiplier when eating prey
@@ -1238,6 +1239,8 @@ def main():
                               color='white', family='monospace',
                               bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
 
+    frame_counter = [0]  # Use list for nonlocal mutation
+
     def update(_frame):
         nonlocal species_lines, global_species_lines
 
@@ -1249,7 +1252,10 @@ def main():
                 break
         elapsed = time.time() - start
 
-        # Add new species lines if needed
+        frame_counter[0] += 1
+        should_update_charts = (frame_counter[0] % CHART_UPDATE_INTERVAL == 0)
+
+        # Add new species lines if needed (always check this)
         while len(species_lines) < len(SPECIES_CONFIG):
             sp_id = len(species_lines)
             color = SPECIES_CONFIG[sp_id]['color']
@@ -1261,67 +1267,69 @@ def main():
             ax_stats.legend(loc='upper right', fontsize=7)
             ax_global.legend(loc='upper right', fontsize=8, ncol=min(len(SPECIES_CONFIG), 5))
 
-        # Update display
+        # Always update display (fast operation)
         img_display.set_array(game.render())
         ax_main.set_title(f'Digital Primordial Soup {mode_str} - Gen {game.generation} ({len(SPECIES_CONFIG)} species)')
 
-        # Update charts (handle sliding window: x-axis starts from actual generation)
-        history_len = len(game.history['population'])
-        if HISTORY_WINDOW > 0 and history_len > 0:
-            # With sliding window, x starts from (current_gen - history_len + 1)
-            start_gen = game.generation - history_len + 1
-            gens = list(range(start_gen, game.generation + 1))
-        else:
-            gens = list(range(history_len))
+        # Update charts only every CHART_UPDATE_INTERVAL frames (expensive operations)
+        if should_update_charts:
+            history_len = len(game.history['population'])
+            if HISTORY_WINDOW > 0 and history_len > 0:
+                # With sliding window, x starts from (current_gen - history_len + 1)
+                start_gen = game.generation - history_len + 1
+                gens = list(range(start_gen, game.generation + 1))
+            else:
+                gens = list(range(history_len))
 
-        for sp_id in range(len(species_lines)):
-            if sp_id < len(game.history['species']):
-                species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
-        line_total.set_data(gens, game.history['population'])
+            for sp_id in range(len(species_lines)):
+                if sp_id < len(game.history['species']):
+                    species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
+            line_total.set_data(gens, game.history['population'])
 
-        if history_len > 100:
-            ax_stats.set_xlim(gens[-100] if len(gens) >= 100 else gens[0], gens[-1] if gens else 100)
-        ax_global.set_xlim(gens[0] if gens else 0, max(gens[-1] if gens else 100, 100))
+            if history_len > 100:
+                ax_stats.set_xlim(gens[-100] if len(gens) >= 100 else gens[0], gens[-1] if gens else 100)
+            ax_global.set_xlim(gens[0] if gens else 0, max(gens[-1] if gens else 100, 100))
 
-        if game.history['population']:
-            max_pop = max(game.history['population']) * 1.2
-            ax_stats.set_ylim(0, max(max_pop, 100))
-            ax_global.set_ylim(0, max(max_pop, 100))
+            if game.history['population']:
+                max_pop = max(game.history['population']) * 1.2
+                ax_stats.set_ylim(0, max(max_pop, 100))
+                ax_global.set_ylim(0, max(max_pop, 100))
 
-        for sp_id in range(len(global_species_lines)):
-            if sp_id < len(game.history['species']):
-                global_species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
-        line_global_total.set_data(gens, game.history['population'])
+            for sp_id in range(len(global_species_lines)):
+                if sp_id < len(game.history['species']):
+                    global_species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
+            line_global_total.set_data(gens, game.history['population'])
 
-        # Hide extinct species from legend (only update when status changes)
-        legend_needs_update = False
-        for sp_id in range(len(SPECIES_CONFIG)):
-            is_extinct = SPECIES_CONFIG[sp_id].get('extinct', False)
+        # Hide extinct species from legend (only check when updating charts)
+        if should_update_charts:
+            legend_needs_update = False
+            for sp_id in range(len(SPECIES_CONFIG)):
+                is_extinct = SPECIES_CONFIG[sp_id].get('extinct', False)
 
-            if sp_id < len(species_lines):
-                # Only update if visibility changed
-                if species_lines[sp_id].get_visible() != (not is_extinct):
-                    species_lines[sp_id].set_visible(not is_extinct)
-                    if is_extinct:
-                        species_lines[sp_id].set_label('_hidden')
-                    else:
-                        name = SPECIES_CONFIG[sp_id]['name']
-                        species_lines[sp_id].set_label(f'{sp_id}: {name}')
-                    legend_needs_update = True
+                if sp_id < len(species_lines):
+                    # Only update if visibility changed
+                    if species_lines[sp_id].get_visible() != (not is_extinct):
+                        species_lines[sp_id].set_visible(not is_extinct)
+                        if is_extinct:
+                            species_lines[sp_id].set_label('_hidden')
+                        else:
+                            name = SPECIES_CONFIG[sp_id]['name']
+                            species_lines[sp_id].set_label(f'{sp_id}: {name}')
+                        legend_needs_update = True
 
-            if sp_id < len(global_species_lines):
-                if global_species_lines[sp_id].get_visible() != (not is_extinct):
-                    global_species_lines[sp_id].set_visible(not is_extinct)
-                    if is_extinct:
-                        global_species_lines[sp_id].set_label('_hidden')
-                    else:
-                        name = SPECIES_CONFIG[sp_id]['name']
-                        global_species_lines[sp_id].set_label(name)
-                    legend_needs_update = True
+                if sp_id < len(global_species_lines):
+                    if global_species_lines[sp_id].get_visible() != (not is_extinct):
+                        global_species_lines[sp_id].set_visible(not is_extinct)
+                        if is_extinct:
+                            global_species_lines[sp_id].set_label('_hidden')
+                        else:
+                            name = SPECIES_CONFIG[sp_id]['name']
+                            global_species_lines[sp_id].set_label(name)
+                        legend_needs_update = True
 
-        if legend_needs_update:
-            ax_stats.legend(loc='upper right', fontsize=7)
-            ax_global.legend(loc='upper right', fontsize=8, ncol=min(len(SPECIES_CONFIG), 5))
+            if legend_needs_update:
+                ax_stats.legend(loc='upper right', fontsize=7)
+                ax_global.legend(loc='upper right', fontsize=8, ncol=min(len(SPECIES_CONFIG), 5))
 
         # Update info text (only show alive species)
         total = game.history['population'][-1] if game.history['population'] else 0
