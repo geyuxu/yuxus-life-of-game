@@ -1146,45 +1146,39 @@ class GPULifeGame:
         if not fill_mask.any():
             return
 
-        # Create new cells at enclosed positions
-        fill_positions = fill_mask.nonzero(as_tuple=False)
+        # Vectorized batch operations for all fill positions at once
+        # Avoid division by zero: where count==0, use 1 (these positions won't be filled anyway)
+        safe_count = torch.where(similar_neighbor_count > 0, similar_neighbor_count, torch.ones_like(similar_neighbor_count))
 
-        for pos in fill_positions:
-            r, c = pos[0].item(), pos[1].item()
-            count = similar_neighbor_count[r, c].item()
+        # Calculate averages for all positions (3D operations)
+        avg_genome = neighbor_genomes_sum / safe_count.unsqueeze(-1).float()
+        avg_w1 = neighbor_w1_sum / safe_count.unsqueeze(-1).unsqueeze(-1).float()
+        avg_w2 = neighbor_w2_sum / safe_count.unsqueeze(-1).unsqueeze(-1).float()
 
-            if count == 0:
-                continue
+        # Calculate trained_generation for all positions
+        # Where neighbor_trained_gen_count > 0, calculate avg and add 1; otherwise -1
+        safe_trained_count = torch.where(neighbor_trained_gen_count > 0, neighbor_trained_gen_count, torch.ones_like(neighbor_trained_gen_count))
+        avg_trained_gen = neighbor_trained_gen_sum.float() / safe_trained_count.float()
+        child_gen = torch.where(neighbor_trained_gen_count > 0, avg_trained_gen.int() + 1, torch.full_like(neighbor_trained_gen_count, -1))
 
-            # Average genome and weights from similar neighbors
-            avg_genome = neighbor_genomes_sum[r, c] / count
-            avg_w1 = neighbor_w1_sum[r, c] / count
-            avg_w2 = neighbor_w2_sum[r, c] / count
+        # Generate mutation noise for all cells at once
+        mutation_noise_genome = torch.randn_like(self.genome) * MUTATION_RATE * 0.5
+        mutation_noise_w1 = torch.randn_like(self.w1) * MUTATION_RATE * 0.5
+        mutation_noise_w2 = torch.randn_like(self.w2) * MUTATION_RATE * 0.5
 
-            # Calculate trained_generation: if neighbors have trained ancestry, next generation
-            trained_count = neighbor_trained_gen_count[r, c].item()
-            if trained_count > 0:
-                avg_gen = neighbor_trained_gen_sum[r, c].item() / trained_count
-                child_gen = int(avg_gen) + 1
-            else:
-                child_gen = -1  # No trained ancestry
+        # Apply mutations and create new cells (batch assignment using fill_mask)
+        self.genome = torch.where(fill_mask.unsqueeze(-1), avg_genome + mutation_noise_genome, self.genome)
+        self.w1 = torch.where(fill_mask.unsqueeze(-1).unsqueeze(-1), avg_w1 + mutation_noise_w1, self.w1)
+        self.w2 = torch.where(fill_mask.unsqueeze(-1).unsqueeze(-1), avg_w2 + mutation_noise_w2, self.w2)
 
-            # Add small mutation
-            mutation_noise_genome = torch.randn_like(avg_genome) * MUTATION_RATE * 0.5
-            mutation_noise_w1 = torch.randn_like(avg_w1) * MUTATION_RATE * 0.5
-            mutation_noise_w2 = torch.randn_like(avg_w2) * MUTATION_RATE * 0.5
-
-            # Create the new cell
-            self.alive[r, c] = True
-            self.energy[r, c] = SPECIES_OFFSPRING_ENERGY
-            self.genome[r, c] = avg_genome + mutation_noise_genome
-            self.w1[r, c] = avg_w1 + mutation_noise_w1
-            self.w2[r, c] = avg_w2 + mutation_noise_w2
-            self.is_newborn[r, c] = True
-            self.lifetime[r, c] = 0
-            self.repro_count[r, c] = 0
-            self.hunger[r, c] = 0
-            self.trained_generation[r, c] = child_gen
+        # Update all state tensors in batch
+        self.alive[fill_mask] = True
+        self.energy[fill_mask] = SPECIES_OFFSPRING_ENERGY
+        self.is_newborn[fill_mask] = True
+        self.lifetime[fill_mask] = 0
+        self.repro_count[fill_mask] = 0
+        self.hunger[fill_mask] = 0
+        self.trained_generation[fill_mask] = child_gen[fill_mask]
 
     def _tissue_fission(self):
         """
