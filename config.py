@@ -102,6 +102,16 @@ REWARD_SURVIVE_ATTACK = 1.0    # Reward for escaping
 REWARD_REPRODUCE = 1.5         # Reward for reproduction
 
 # ==============================================================================
+# FITNESS FUNCTION
+# ==============================================================================
+
+# Multi-objective fitness weights
+FITNESS_WEIGHT_LIFETIME = 1.0       # Survival time
+FITNESS_WEIGHT_REPRODUCTION = 10.0  # Reproductive success (harder to achieve)
+FITNESS_WEIGHT_DIVERSITY = 5.0      # Genetic uniqueness bonus
+FITNESS_WEIGHT_ENERGY = 0.5         # Energy efficiency
+
+# ==============================================================================
 # NETWORK PERSISTENCE
 # ==============================================================================
 
@@ -161,6 +171,12 @@ def print_config():
     print(f"  Mutation rate: {MUTATION_RATE}")
     print(f"  Mate genome threshold: {MATE_GENOME_THRESHOLD}")
     print(f"  Dominance threshold: {DOMINANCE_THRESHOLD*100:.0f}%")
+
+    print(f"\n[Fitness Function]")
+    print(f"  Lifetime weight: {FITNESS_WEIGHT_LIFETIME}")
+    print(f"  Reproduction weight: {FITNESS_WEIGHT_REPRODUCTION}")
+    print(f"  Diversity weight: {FITNESS_WEIGHT_DIVERSITY}")
+    print(f"  Energy weight: {FITNESS_WEIGHT_ENERGY}")
 
     print(f"\n[Auto-save]")
     print(f"  Enabled: {AUTO_SAVE_ENABLED}")

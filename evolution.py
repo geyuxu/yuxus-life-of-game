@@ -393,14 +393,70 @@ class GPULifeGame:
         # Queue for async save (non-blocking)
         ASYNC_SAVER.save_async(checkpoint, SAVE_FILE)
 
+    def _calculate_fitness(self):
+        """
+        Calculate multi-objective fitness for all cells.
+
+        Fitness components (configurable weights in config.py):
+        1. Lifetime (survival ability)
+        2. Reproduction count (evolutionary success)
+        3. Diversity bonus (genetic uniqueness - rewards rare genomes)
+        4. Energy efficiency (resource management)
+
+        Returns:
+            Tensor of fitness values for all cells
+        """
+        if not self.alive.any():
+            return torch.zeros_like(self.lifetime, dtype=torch.float32)
+
+        # Component 1: Lifetime (raw survival time)
+        lifetime_score = self.lifetime.float() * FITNESS_WEIGHT_LIFETIME
+
+        # Component 2: Reproduction count (weighted heavily - harder to achieve)
+        reproduction_score = self.repro_count.float() * FITNESS_WEIGHT_REPRODUCTION
+
+        # Component 3: Diversity bonus (reward for unique genomes)
+        # Calculate genome distances to all other alive cells
+        alive_mask = self.alive
+        diversity_bonus = torch.zeros_like(self.lifetime, dtype=torch.float32)
+
+        if alive_mask.sum() > 1:  # Need at least 2 alive cells
+            # Get alive genomes
+            alive_genomes = self.genome[alive_mask]  # [N, 12]
+            alive_positions = alive_mask.nonzero(as_tuple=False)  # [N, 2]
+
+            # For each alive cell, calculate average distance to other alive cells
+            for idx, pos in enumerate(alive_positions):
+                r, c = pos[0].item(), pos[1].item()
+                cell_genome = self.genome[r, c]  # [12]
+
+                # Calculate distances to all other alive cells
+                distances = torch.norm(alive_genomes - cell_genome.unsqueeze(0), dim=1)
+                # Exclude self (distance=0)
+                other_distances = distances[distances > 0]
+
+                if len(other_distances) > 0:
+                    # Average distance to others = diversity score
+                    # Higher distance = more unique = higher bonus
+                    avg_distance = other_distances.mean()
+                    diversity_bonus[r, c] = avg_distance * FITNESS_WEIGHT_DIVERSITY
+
+        # Component 4: Energy efficiency (normalized current energy)
+        energy_score = self.energy / MAX_ENERGY * FITNESS_WEIGHT_ENERGY
+
+        # Total fitness (only for alive cells)
+        fitness = lifetime_score + reproduction_score + diversity_bonus + energy_score
+        fitness = torch.where(self.alive, fitness, torch.zeros_like(fitness))
+
+        return fitness
+
     def _update_best_network(self):
-        """Find and track the best performing individual."""
+        """Find and track the best performing individual using multi-objective fitness."""
         if not self.alive.any():
             return
 
-        # Fitness = lifetime + reproduction_count * 10
-        fitness = self.lifetime.float() + self.repro_count.float() * 10
-        fitness = torch.where(self.alive, fitness, torch.zeros_like(fitness))
+        # Calculate multi-objective fitness
+        fitness = self._calculate_fitness()
 
         max_fitness = fitness.max().item()
         if max_fitness > self.best_fitness:
