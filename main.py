@@ -71,6 +71,10 @@ RANDOM_MUTATION_CHANCE = 0.1  # Probability per species per check
 # Species recycling
 EXTINCT_RECYCLE_DELAY = 50  # Generations before extinct species slot can be reused
 
+# Blob-based speciation
+BLOB_SEPARATION_DELAY = 50  # Generations of separation before blob becomes new species
+BLOB_CHECK_INTERVAL = 10    # Check for blob separation every N generations
+
 # Performance tuning
 HISTORY_WINDOW = 1000       # Keep only last N generations in history (0 = unlimited)
 RENDER_INTERVAL = 1         # Render every N frames (increase for faster simulation)
@@ -340,6 +344,10 @@ class GPULifeGame:
 
         self.history = {'population': [], 'species': [[] for _ in range(len(SPECIES_CONFIG))]}
 
+        # Blob separation tracking: {species_id: {blob_hash: first_seen_gen}}
+        # When a species has multiple blobs, track when each blob was first detected
+        self.blob_separation_tracker = {}
+
     # -------------------------------------------------------------------------
     # Weight Persistence
     # -------------------------------------------------------------------------
@@ -577,6 +585,9 @@ class GPULifeGame:
         # Random mutation (every MUTATION_INTERVAL generations)
         self._check_random_mutation()
 
+        # Blob separation speciation (geographic isolation)
+        self._check_blob_separation()
+
         # Species splitting (dominant species)
         self._check_and_split_dominant_species()
 
@@ -785,6 +796,160 @@ class GPULifeGame:
 
         self.reward.fill_(0)
 
+    # -------------------------------------------------------------------------
+    # Blob Detection and Separation
+    # -------------------------------------------------------------------------
+    def _find_species_blobs(self, species_id: int):
+        """
+        Find connected components (blobs) for a species using flood fill.
+        Returns list of position tensors, one per blob, sorted by size (largest first).
+        """
+        species_mask = (self.species == species_id) & self.alive
+        if not species_mask.any():
+            return []
+
+        # Get positions as numpy for efficient flood fill
+        mask_np = species_mask.cpu().numpy()
+        visited = np.zeros_like(mask_np, dtype=bool)
+        blobs = []
+
+        # 8-connectivity directions
+        dirs = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+        positions = np.argwhere(mask_np)
+        for start_r, start_c in positions:
+            if visited[start_r, start_c]:
+                continue
+
+            # Flood fill from this position
+            blob_positions = []
+            stack = [(start_r, start_c)]
+            while stack:
+                r, c = stack.pop()
+                if visited[r, c]:
+                    continue
+                if not mask_np[r, c]:
+                    continue
+                visited[r, c] = True
+                blob_positions.append((r, c))
+
+                # Check neighbors (with toroidal wrap)
+                for dr, dc in dirs:
+                    nr = (r + dr) % self.size
+                    nc = (c + dc) % self.size
+                    if mask_np[nr, nc] and not visited[nr, nc]:
+                        stack.append((nr, nc))
+
+            if blob_positions:
+                # Convert to tensor
+                blob_arr = np.array(blob_positions)
+                blob_tensor = torch.tensor(blob_arr, dtype=torch.long, device=DEVICE)
+                blobs.append(blob_tensor)
+
+        # Sort by size (largest first)
+        blobs.sort(key=lambda x: len(x), reverse=True)
+        return blobs
+
+    def _split_species_by_blob(self, species_id: int, new_species_id: int, blob_idx: int = 1):
+        """
+        Convert a specific blob of a species to a new species.
+        blob_idx=1 means convert the second largest blob (keep largest as original).
+        """
+        blobs = self._find_species_blobs(species_id)
+        if len(blobs) <= blob_idx:
+            return 0  # Not enough blobs to split
+
+        # Get the blob to convert
+        blob_positions = blobs[blob_idx]
+        blob_r = blob_positions[:, 0]
+        blob_c = blob_positions[:, 1]
+
+        # Convert to new species
+        self.species[blob_r, blob_c] = new_species_id
+
+        # Apply mutation to neural network weights
+        mutation_w1 = torch.randn_like(self.w1[blob_r, blob_c]) * SPLIT_MUTATION_RATE
+        mutation_w2 = torch.randn_like(self.w2[blob_r, blob_c]) * SPLIT_MUTATION_RATE
+        self.w1[blob_r, blob_c] += mutation_w1
+        self.w2[blob_r, blob_c] += mutation_w2
+
+        return len(blob_positions)
+
+    def _check_blob_separation(self):
+        """
+        Check for species with separated blobs and trigger speciation after BLOB_SEPARATION_DELAY.
+        """
+        if self.generation % BLOB_CHECK_INTERVAL != 0:
+            return
+
+        # Get alive species counts
+        alive_species_mask = self.species[self.alive]
+        if len(alive_species_mask) == 0:
+            return
+
+        counts = torch.bincount(alive_species_mask.long(), minlength=MAX_SPECIES)
+
+        for sp_id in range(len(SPECIES_CONFIG)):
+            if SPECIES_CONFIG[sp_id]['extinct']:
+                continue
+            if counts[sp_id].item() < 10:  # Need minimum population for blob analysis
+                # Clear tracking for small populations
+                if sp_id in self.blob_separation_tracker:
+                    del self.blob_separation_tracker[sp_id]
+                continue
+
+            blobs = self._find_species_blobs(sp_id)
+
+            if len(blobs) <= 1:
+                # Single blob or empty - clear separation tracking
+                if sp_id in self.blob_separation_tracker:
+                    del self.blob_separation_tracker[sp_id]
+                continue
+
+            # Multiple blobs detected - track separation
+            if sp_id not in self.blob_separation_tracker:
+                self.blob_separation_tracker[sp_id] = self.generation
+                continue
+
+            # Check if separated long enough
+            separation_duration = self.generation - self.blob_separation_tracker[sp_id]
+            if separation_duration < BLOB_SEPARATION_DELAY:
+                continue
+
+            # Blob separation speciation!
+            # The second largest blob becomes a new species
+            second_blob_size = len(blobs[1])
+            total_size = counts[sp_id].item()
+
+            # Only speciate if second blob is significant (>10% of species)
+            if second_blob_size < total_size * 0.1:
+                continue
+
+            # Create new species with same hidden size (geographic isolation, not mutation)
+            new_species_id = create_child_species(sp_id, hidden_delta=0, current_gen=self.generation)
+            if new_species_id is None:
+                continue
+
+            # Convert the second blob to new species
+            num_converted = self._split_species_by_blob(sp_id, new_species_id, blob_idx=1)
+
+            parent_name = SPECIES_CONFIG[sp_id]['name']
+            new_name = SPECIES_CONFIG[new_species_id]['name']
+
+            print(f"\n[ISOLATION] Geographic separation in {parent_name}")
+            print(f"            Blob split after {separation_duration} generations apart")
+            print(f"            New species: {new_name} ({num_converted} cells)")
+            print(f"            Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
+
+            # Handle history for new species
+            if new_species_id < len(self.history['species']):
+                self.history['species'][new_species_id] = [0] * len(self.history['population'])
+            else:
+                self.history['species'].append([0] * len(self.history['population']))
+
+            # Clear separation tracker for this species (now single blob)
+            del self.blob_separation_tracker[sp_id]
+
     def _check_random_mutation(self):
         """
         Check for random mutations every MUTATION_INTERVAL generations.
@@ -831,33 +996,38 @@ class GPULifeGame:
 
             # Handle history tracking for new/recycled species
             if new_species_id < len(self.history['species']):
-                # Recycled slot: reset history to zeros
                 self.history['species'][new_species_id] = [0] * len(self.history['population'])
             else:
-                # New slot: append new history
                 self.history['species'].append([0] * len(self.history['population']))
 
-            # Convert some members of parent species to new species
-            parent_mask = (self.species == sp_id) & self.alive
-            parent_positions = parent_mask.nonzero(as_tuple=False)
+            # Use blob-based splitting: convert entire blob to new species
+            blobs = self._find_species_blobs(sp_id)
+            if len(blobs) >= 2:
+                # Multiple blobs: convert the second largest blob
+                num_converted = self._split_species_by_blob(sp_id, new_species_id, blob_idx=1)
+                print(f"           Blob of {num_converted} cells becomes {new_name}")
+            elif len(blobs) == 1 and len(blobs[0]) > 1:
+                # Single blob: split it in half spatially
+                blob = blobs[0]
+                # Use centroid to split
+                centroid_r = blob[:, 0].float().mean()
+                half_size = len(blob) // 5  # Take 20% of the blob
+                # Sort by distance from centroid and take furthest ones
+                distances = ((blob[:, 0].float() - centroid_r) ** 2 +
+                            (blob[:, 1].float() - blob[:, 1].float().mean()) ** 2)
+                _, indices = distances.sort(descending=True)
+                split_indices = indices[:half_size]
 
-            if len(parent_positions) > 0:
-                # 20% of parent species become the new mutant species
-                num_to_convert = max(1, len(parent_positions) // 5)
-                perm = torch.randperm(len(parent_positions), device=DEVICE)
-                convert_indices = parent_positions[perm[:num_to_convert]]
-
-                convert_r = convert_indices[:, 0]
-                convert_c = convert_indices[:, 1]
-                self.species[convert_r, convert_c] = new_species_id
-
-                # Apply mutation to neural network weights
-                mutation_w1 = torch.randn_like(self.w1[convert_r, convert_c]) * SPLIT_MUTATION_RATE
-                mutation_w2 = torch.randn_like(self.w2[convert_r, convert_c]) * SPLIT_MUTATION_RATE
-                self.w1[convert_r, convert_c] += mutation_w1
-                self.w2[convert_r, convert_c] += mutation_w2
-
-                print(f"           {num_to_convert} cells become {new_name}")
+                if len(split_indices) > 0:
+                    split_r = blob[split_indices, 0]
+                    split_c = blob[split_indices, 1]
+                    self.species[split_r, split_c] = new_species_id
+                    # Apply mutation
+                    mutation_w1 = torch.randn_like(self.w1[split_r, split_c]) * SPLIT_MUTATION_RATE
+                    mutation_w2 = torch.randn_like(self.w2[split_r, split_c]) * SPLIT_MUTATION_RATE
+                    self.w1[split_r, split_c] += mutation_w1
+                    self.w2[split_r, split_c] += mutation_w2
+                    print(f"           {len(split_indices)} cells (edge of blob) become {new_name}")
 
     def _check_and_split_dominant_species(self):
         """Split dominant species to maintain ecosystem diversity (CUDA optimized)."""
@@ -905,27 +1075,41 @@ class GPULifeGame:
             # New slot: append new history
             self.history['species'].append([0] * len(self.history['population']))
 
-        dominant_mask = (self.species == dominant_species) & self.alive
-        dominant_positions = dominant_mask.nonzero(as_tuple=False)
+        # Use blob-based splitting for dominance speciation
+        blobs = self._find_species_blobs(dominant_species)
 
-        num_to_split = len(dominant_positions) // 2
-        if num_to_split == 0:
+        if len(blobs) >= 2:
+            # Multiple blobs: convert the second largest blob entirely
+            num_converted = self._split_species_by_blob(dominant_species, new_species_id, blob_idx=1)
+            print(f"             Blob of {num_converted} cells becomes {new_name}")
+        elif len(blobs) == 1 and len(blobs[0]) > 1:
+            # Single blob: split it in half spatially (by centroid distance)
+            blob = blobs[0]
+            centroid_r = blob[:, 0].float().mean()
+            centroid_c = blob[:, 1].float().mean()
+
+            # Sort by distance from centroid, take the far half
+            distances = ((blob[:, 0].float() - centroid_r) ** 2 +
+                        (blob[:, 1].float() - centroid_c) ** 2)
+            _, indices = distances.sort(descending=True)
+            num_to_split = len(blob) // 2
+            split_indices = indices[:num_to_split]
+
+            if len(split_indices) > 0:
+                split_r = blob[split_indices, 0]
+                split_c = blob[split_indices, 1]
+                self.species[split_r, split_c] = new_species_id
+
+                # Apply higher mutation during speciation
+                mutation_w1 = torch.randn_like(self.w1[split_r, split_c]) * SPLIT_MUTATION_RATE
+                mutation_w2 = torch.randn_like(self.w2[split_r, split_c]) * SPLIT_MUTATION_RATE
+                self.w1[split_r, split_c] += mutation_w1
+                self.w2[split_r, split_c] += mutation_w2
+
+                print(f"             {len(split_indices)} cells (far half of blob) become {new_name}")
+        else:
+            print(f"             No cells to split")
             return False
-
-        perm = torch.randperm(len(dominant_positions), device=DEVICE)
-        split_indices = dominant_positions[perm[:num_to_split]]
-
-        split_r = split_indices[:, 0]
-        split_c = split_indices[:, 1]
-        self.species[split_r, split_c] = new_species_id
-
-        # Apply higher mutation during speciation
-        mutation_w1 = torch.randn_like(self.w1[split_r, split_c]) * SPLIT_MUTATION_RATE
-        mutation_w2 = torch.randn_like(self.w2[split_r, split_c]) * SPLIT_MUTATION_RATE
-        self.w1[split_r, split_c] += mutation_w1
-        self.w2[split_r, split_c] += mutation_w2
-
-        print(f"             {num_to_split} cells become {new_name}")
         return True
 
     # -------------------------------------------------------------------------
@@ -1004,6 +1188,9 @@ def print_system_info():
     print(f"  Check every {MUTATION_INTERVAL} generations")
     print(f"  {RANDOM_MUTATION_CHANCE*100:.0f}% chance per species per check")
     print(f"  60% gain neurons, 40% lose neurons")
+    print(f"\n[Geographic Isolation]")
+    print(f"  Blob separation check every {BLOB_CHECK_INTERVAL} generations")
+    print(f"  Auto-speciate after {BLOB_SEPARATION_DELAY} generations apart")
     print(f"\n[Network Persistence]")
     print(f"  Save best network every {SAVE_INTERVAL} generations to: {SAVE_FILE}")
     print(f"  Fitness = lifetime + reproduction_count * 10")
@@ -1127,35 +1314,42 @@ def main():
                 global_species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
         line_global_total.set_data(gens, game.history['population'])
 
-        # Update legend labels for extinct species
+        # Hide extinct species from legend (only show alive species)
         legend_needs_update = False
         for sp_id in range(len(SPECIES_CONFIG)):
             is_extinct = SPECIES_CONFIG[sp_id].get('extinct', False)
-            name = SPECIES_CONFIG[sp_id]['name']
 
             if sp_id < len(species_lines):
-                current_label = species_lines[sp_id].get_label()
-                expected_label = f"✗{sp_id}: {name}" if is_extinct else f"{sp_id}: {name}"
-                if current_label != expected_label:
-                    species_lines[sp_id].set_label(expected_label)
-                    legend_needs_update = True
+                # Hide extinct species line and remove from legend
+                species_lines[sp_id].set_visible(not is_extinct)
+                if is_extinct:
+                    species_lines[sp_id].set_label('_hidden')  # Underscore prefix hides from legend
+                else:
+                    name = SPECIES_CONFIG[sp_id]['name']
+                    species_lines[sp_id].set_label(f'{sp_id}: {name}')
+                legend_needs_update = True
 
             if sp_id < len(global_species_lines):
-                current_label = global_species_lines[sp_id].get_label()
-                expected_label = f"✗{name}" if is_extinct else name
-                if current_label != expected_label:
-                    global_species_lines[sp_id].set_label(expected_label)
-                    legend_needs_update = True
+                global_species_lines[sp_id].set_visible(not is_extinct)
+                if is_extinct:
+                    global_species_lines[sp_id].set_label('_hidden')
+                else:
+                    name = SPECIES_CONFIG[sp_id]['name']
+                    global_species_lines[sp_id].set_label(name)
+                legend_needs_update = True
 
         if legend_needs_update:
+            # Rebuild legends with only visible species
             ax_stats.legend(loc='upper right', fontsize=7)
             ax_global.legend(loc='upper right', fontsize=8, ncol=min(len(SPECIES_CONFIG), 5))
 
-        # Update info text
+        # Update info text (only show alive species)
         total = game.history['population'][-1] if game.history['population'] else 0
-        alive_species = sum(1 for sp in SPECIES_CONFIG if not sp.get('extinct', False))
-        info = f"Gen: {game.generation} | Alive: {alive_species}/{len(SPECIES_CONFIG)} | Pop: {total}\n"
+        alive_species_count = sum(1 for sp in SPECIES_CONFIG if not sp.get('extinct', False))
+        info = f"Gen: {game.generation} | Species: {alive_species_count} | Pop: {total}\n"
         for sp_id in range(len(SPECIES_CONFIG)):
+            if SPECIES_CONFIG[sp_id].get('extinct', False):
+                continue  # Skip extinct species entirely
             if sp_id < len(game.history['species']) and game.history['species'][sp_id]:
                 count = game.history['species'][sp_id][-1]
             else:
@@ -1163,7 +1357,6 @@ def main():
             name = SPECIES_CONFIG[sp_id]['name']
             if count == 0:
                 SPECIES_CONFIG[sp_id]['extinct'] = True
-                info += f"✗ {name}\n"
             else:
                 info += f"{name}: {count}\n"
         info += f"Step: {elapsed*1000:.1f}ms"
