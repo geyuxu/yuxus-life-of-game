@@ -40,11 +40,11 @@ WINDOW_WIDTH = 1600
 WINDOW_HEIGHT = 900
 FPS_TARGET = 60
 
-# UI Colors
-COLOR_BG = (20, 20, 20)
-COLOR_TEXT = (220, 220, 220)
-COLOR_GRID = (60, 60, 60)
-COLOR_PANEL = (30, 30, 30)
+# UI Colors (White theme)
+COLOR_BG = (255, 255, 255)      # White background
+COLOR_TEXT = (30, 30, 30)       # Dark text for readability
+COLOR_GRID = (200, 200, 200)    # Light gray grid
+COLOR_PANEL = (245, 245, 245)   # Light gray panel
 
 # =============================================================================
 # PYGAME RENDERER
