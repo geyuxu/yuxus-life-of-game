@@ -461,31 +461,42 @@ def genome_to_color(genome: np.ndarray) -> tuple:
     """
     Map genome to RGB color using HSV color space.
 
-    Uses first 3 genome dimensions (w1_mean, w1_std, w1_abs_mean) to generate:
-    - Hue: Normalized w1_mean (range 0-1)
-    - Saturation: Normalized w1_std (range 0.5-1.0)
-    - Value: Normalized w1_abs_mean (range 0.6-1.0)
+    Combines neural fingerprint AND chemical affinity for color diversity:
+    - Hue: Based on neural w1_mean + chemical affinity[0]
+    - Saturation: Based on neural w1_std + chemical affinity[1]
+    - Value: Based on neural w1_abs_mean + chemical affinity[2]
 
     Args:
-        genome: 12-dimensional genome vector
+        genome: 12-dimensional genome vector (8 neural + 4 chemical)
 
     Returns:
         RGB tuple (3 floats in range 0-1)
     """
-    # Use first 3 neural features for color mapping
+    # Neural features (first 8 dimensions)
     w1_mean = genome[0]
     w1_std = genome[1]
     w1_abs_mean = genome[2]
 
+    # Chemical features (last 4 dimensions)
+    chem0 = genome[8]
+    chem1 = genome[9]
+    chem2 = genome[10]
+
     # Map to HSV with normalization
-    # Hue: Use tanh to map mean to [0, 1]
-    hue = (np.tanh(w1_mean) + 1.0) / 2.0
+    # Hue: Combine neural mean + chemical[0] for more diversity
+    hue_neural = np.tanh(w1_mean)
+    hue_chem = np.tanh(chem0 * 2.0)  # Scale chemical influence
+    hue = ((hue_neural + hue_chem) / 2.0 + 1.0) / 2.0  # Average and normalize to [0, 1]
 
-    # Saturation: Map std to [0.5, 1.0] for vibrant colors
-    saturation = 0.5 + 0.5 * np.tanh(w1_std * 2.0)
+    # Saturation: Combine neural std + chemical[1]
+    sat_neural = np.tanh(w1_std * 2.0)
+    sat_chem = np.tanh(chem1 * 2.0)
+    saturation = 0.5 + 0.5 * (sat_neural + sat_chem) / 2.0  # Range [0.5, 1.0]
 
-    # Value (brightness): Map abs_mean to [0.6, 1.0] for visible colors
-    value = 0.6 + 0.4 * np.tanh(w1_abs_mean)
+    # Value (brightness): Combine neural abs_mean + chemical[2]
+    val_neural = np.tanh(w1_abs_mean)
+    val_chem = np.tanh(chem2 * 2.0)
+    value = 0.6 + 0.4 * (val_neural + val_chem) / 2.0  # Range [0.6, 1.0]
 
     return colorsys.hsv_to_rgb(hue, saturation, value)
 
@@ -792,14 +803,31 @@ class GPULifeGame:
                 print(f"                 S1/S2 use random weights (control group)")
         else:
             # Normal mode: elite cells use trained weights
+            # Only load partial hidden neurons from saved weights, keep rest random for diversity
             num_elite = int(num_cells * ELITE_RATIO)
             if num_elite > 0:
                 elite_indices = torch.randperm(num_cells, device=DEVICE)[:num_elite]
                 elite_rows = rows[elite_indices]
                 elite_cols = cols[elite_indices]
-                self.w1[elite_rows, elite_cols] = self.saved_w1.clone() + torch.randn_like(self.saved_w1) * 0.05
-                self.w2[elite_rows, elite_cols] = self.saved_w2.clone() + torch.randn_like(self.saved_w2) * 0.05
-                print(f"{num_elite} cells inherited saved network weights")
+
+                # Only copy 50% of hidden neurons from saved weights
+                # The rest remain random-initialized for diversity
+                saved_hidden = self.saved_hidden_size
+                copy_hidden = saved_hidden // 2  # Only use half of saved neurons
+
+                # w1: [INPUT_SIZE, MAX_HIDDEN_SIZE]
+                # Copy only first half of hidden neurons from saved weights
+                self.w1[elite_rows, elite_cols, :, :copy_hidden] = \
+                    self.saved_w1[:, :copy_hidden].clone() + torch.randn((INPUT_SIZE, copy_hidden), device=DEVICE) * 0.05
+
+                # w2: [MAX_HIDDEN_SIZE, NUM_ACTIONS]
+                # Copy only first half of hidden neurons from saved weights
+                self.w2[elite_rows, elite_cols, :copy_hidden, :] = \
+                    self.saved_w2[:copy_hidden, :].clone() + torch.randn((copy_hidden, NUM_ACTIONS), device=DEVICE) * 0.05
+
+                # The rest of hidden neurons (copy_hidden:MAX_HIDDEN_SIZE) remain random
+                # This creates diversity: each cell has 50% learned + 50% random
+                print(f"{num_elite} cells inherited saved weights (50% saved + 50% random for diversity)")
 
     # -------------------------------------------------------------------------
     # Neural Network
@@ -1133,7 +1161,17 @@ class GPULifeGame:
             predator_eat = predator_eat & ~can_eat
 
     def _parallel_reproduce(self, is_reproduce, rand_shared=None):
-        """Handle reproduction with inheritance and mutation (optimized: reduced .any() calls)."""
+        """
+        Handle reproduction with sexual crossover inheritance and mutation.
+
+        Sexual reproduction (crossover):
+        - Find a mate (same-species neighbor)
+        - Offspring inherits neurons randomly from father/mother (50/50 interleaved)
+        - Apply mutation after inheritance
+
+        Asexual reproduction (fallback):
+        - If no mate found, clone parent with mutation
+        """
         dirs = [(-1, 0), (1, 0), (0, -1), (0, 1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
 
         # Vectorized parameter lookups
@@ -1152,7 +1190,10 @@ class GPULifeGame:
             can_reproduce = is_reproduce & target_empty & (self.energy >= repro_threshold)
             winner = can_reproduce & (rand_shared > 0.5)
 
-            # Direct tensor operations (empty mask = no-op, no .any() check needed)
+            if not winner.any():
+                continue
+
+            # Direct tensor operations
             self.energy[winner] -= repro_cost[winner]
             self.reward[winner] += REWARD_REPRODUCE
             self.repro_count[winner] += 1
@@ -1165,9 +1206,78 @@ class GPULifeGame:
             self.hunger[child_r, child_c] = 0
             self.is_newborn[child_r, child_c] = True
 
-            # Inheritance with mutation
-            self.w1[child_r, child_c] = self.w1[winner] + torch.randn_like(self.w1[winner]) * MUTATION_RATE
-            self.w2[child_r, child_c] = self.w2[winner] + torch.randn_like(self.w2[winner]) * MUTATION_RATE
+            # Sexual reproduction: find mates (same-species neighbors)
+            parent1_r, parent1_c = self.rows[winner], self.cols[winner]
+            parent1_species = self.species[winner]
+            num_parents = len(parent1_r)
+
+            # Search for mate in 8 neighbors
+            mate_found = torch.zeros(num_parents, dtype=torch.bool, device=DEVICE)
+            mate_r = torch.zeros(num_parents, dtype=torch.long, device=DEVICE)
+            mate_c = torch.zeros(num_parents, dtype=torch.long, device=DEVICE)
+
+            for mate_dr, mate_dc in dirs:
+                if mate_found.all():
+                    break
+
+                candidate_r = (parent1_r + mate_dr) % self.size
+                candidate_c = (parent1_c + mate_dc) % self.size
+
+                is_alive = self.alive[candidate_r, candidate_c]
+                same_species = (self.species[candidate_r, candidate_c] == parent1_species)
+                is_valid_mate = is_alive & same_species & ~mate_found
+
+                mate_r = torch.where(is_valid_mate, candidate_r, mate_r)
+                mate_c = torch.where(is_valid_mate, candidate_c, mate_c)
+                mate_found = mate_found | is_valid_mate
+
+            # Get parent weights
+            parent1_w1 = self.w1[parent1_r, parent1_c]
+            parent1_w2 = self.w2[parent1_r, parent1_c]
+
+            # Sexual reproduction: crossover from two parents
+            sexual_mask = mate_found
+            if sexual_mask.any():
+                sexual_indices = sexual_mask.nonzero(as_tuple=True)[0]
+                num_sexual = len(sexual_indices)
+
+                parent2_w1 = self.w1[mate_r[sexual_indices], mate_c[sexual_indices]]
+                parent2_w2 = self.w2[mate_r[sexual_indices], mate_c[sexual_indices]]
+
+                # Create crossover mask: random 50/50 selection for each hidden neuron (only for sexual offspring)
+                crossover_mask_w1 = torch.rand((num_sexual, INPUT_SIZE, MAX_HIDDEN_SIZE), device=DEVICE) > 0.5
+                crossover_mask_w2 = torch.rand((num_sexual, MAX_HIDDEN_SIZE, NUM_ACTIONS), device=DEVICE) > 0.5
+
+                # Crossover: interleave neurons from both parents
+                child_w1_sexual = torch.where(
+                    crossover_mask_w1,
+                    parent1_w1[sexual_indices],
+                    parent2_w1
+                )
+                child_w2_sexual = torch.where(
+                    crossover_mask_w2,
+                    parent1_w2[sexual_indices],
+                    parent2_w2
+                )
+
+                # Apply mutation
+                child_w1_sexual += torch.randn_like(child_w1_sexual) * MUTATION_RATE
+                child_w2_sexual += torch.randn_like(child_w2_sexual) * MUTATION_RATE
+
+                # Assign to offspring
+                self.w1[child_r[sexual_indices], child_c[sexual_indices]] = child_w1_sexual
+                self.w2[child_r[sexual_indices], child_c[sexual_indices]] = child_w2_sexual
+
+            # Asexual reproduction: clone parent (fallback for cells without mate)
+            asexual_mask = ~mate_found
+            if asexual_mask.any():
+                asexual_indices = asexual_mask.nonzero(as_tuple=True)[0]
+
+                # Simple cloning with mutation
+                self.w1[child_r[asexual_indices], child_c[asexual_indices]] = \
+                    parent1_w1[asexual_indices] + torch.randn_like(parent1_w1[asexual_indices]) * MUTATION_RATE
+                self.w2[child_r[asexual_indices], child_c[asexual_indices]] = \
+                    parent1_w2[asexual_indices] + torch.randn_like(parent1_w2[asexual_indices]) * MUTATION_RATE
 
             self.reward[child_r, child_c] = 0
             self.lifetime[child_r, child_c] = 0
