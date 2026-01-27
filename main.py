@@ -370,6 +370,9 @@ class GPULifeGame:
         self.w1 = torch.randn((size, size, INPUT_SIZE, MAX_HIDDEN_SIZE), device=DEVICE) * 0.5
         self.w2 = torch.randn((size, size, MAX_HIDDEN_SIZE, NUM_ACTIONS), device=DEVICE) * 0.5
 
+        # Genome (12-dim fingerprint: 8 neural + 4 chemical)
+        self.genome = torch.zeros((size, size, 12), dtype=torch.float32, device=DEVICE)
+
         # Position indices for vectorized operations
         self.rows = torch.arange(size, device=DEVICE).view(-1, 1).expand(size, size)
         self.cols = torch.arange(size, device=DEVICE).view(1, -1).expand(size, size)
