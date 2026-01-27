@@ -65,7 +65,7 @@ class PyGameRenderer:
 
         # View settings
         self.show_chemical = False
-        self.show_grid = True
+        self.show_grid = False  # Grid disabled by default (press G to toggle)
         self.chemical_alpha = 0.5
         self.simulation_speed = 1  # Steps per frame
 
@@ -159,9 +159,11 @@ class PyGameRenderer:
                 # Calculate screen position
                 sx, sy = self.world_to_screen(x, y)
 
-                # Draw cell
-                rect = pygame.Rect(sx, sy, self.cell_size, self.cell_size)
-                pygame.draw.rect(self.main_surface, color, rect)
+                # Draw cell as a circle (cell-like appearance)
+                center_x = int(sx + self.cell_size / 2)
+                center_y = int(sy + self.cell_size / 2)
+                radius = max(1, int(self.cell_size * 0.45))  # Slightly smaller than cell to avoid overlap
+                pygame.draw.circle(self.main_surface, color, (center_x, center_y), radius)
 
         # Chemical overlay
         if self.show_chemical:
@@ -210,25 +212,42 @@ class PyGameRenderer:
                     # Normalize combined color
                     combined_color = [min(255, int(c / total_intensity)) for c in combined_color]
 
-                    # Draw colored cell
+                    # Draw colored cell as circle (consistent with cell rendering)
                     sx, sy = self.world_to_screen(x, y)
-                    rect = pygame.Rect(sx, sy, self.cell_size, self.cell_size)
-                    pygame.draw.rect(overlay, combined_color, rect)
+                    center_x = int(sx + self.cell_size / 2)
+                    center_y = int(sy + self.cell_size / 2)
+                    radius = max(1, int(self.cell_size * 0.45))
+                    pygame.draw.circle(overlay, combined_color, (center_x, center_y), radius)
 
         self.main_surface.blit(overlay, (0, 0))
 
     def render_grid(self):
-        """Render grid lines."""
+        """Render grid lines with adaptive opacity based on cell size."""
+        # Adjust grid opacity: darker when cells are small, lighter when cells are large
+        # For cell_size < 10: use darker grid (60, 60, 60)
+        # For cell_size > 30: use lighter grid (40, 40, 40) or less
+        if self.cell_size > 30:
+            # Large cells: very subtle grid
+            grid_intensity = max(25, int(60 - (self.cell_size - 30) * 0.8))
+        elif self.cell_size > 15:
+            # Medium cells: moderate grid
+            grid_intensity = int(60 - (self.cell_size - 15) * 0.5)
+        else:
+            # Small cells: standard grid
+            grid_intensity = 60
+
+        grid_color = (grid_intensity, grid_intensity, grid_intensity)
+
         for i in range(self.game.size + 1):
             # Vertical lines
             sx, sy_top = self.world_to_screen(i, 0)
             _, sy_bottom = self.world_to_screen(i, self.game.size)
-            pygame.draw.line(self.main_surface, COLOR_GRID, (sx, sy_top), (sx, sy_bottom), 1)
+            pygame.draw.line(self.main_surface, grid_color, (sx, sy_top), (sx, sy_bottom), 1)
 
             # Horizontal lines
             sx_left, sy = self.world_to_screen(0, i)
             sx_right, _ = self.world_to_screen(self.game.size, i)
-            pygame.draw.line(self.main_surface, COLOR_GRID, (sx_left, sy), (sx_right, sy), 1)
+            pygame.draw.line(self.main_surface, grid_color, (sx_left, sy), (sx_right, sy), 1)
 
     def render_stats_panel(self):
         """Render statistics panel on the right."""
