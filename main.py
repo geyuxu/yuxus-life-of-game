@@ -453,6 +453,51 @@ class PyGameRenderer:
             self.stats_surface.blit(text, (10, y_offset))
             y_offset += 22
 
+        # Evolution trends (show recent change)
+        y_offset += 10
+        title = self.font_medium.render('Evolution Trends', True, COLOR_TEXT)
+        self.stats_surface.blit(title, (10, y_offset))
+        y_offset += 30
+
+        history = self.game.history
+        if len(history['population']) >= 10:
+            # Calculate trends over last 100 generations
+            window = min(100, len(history['population']))
+
+            # Population trend
+            pop_recent = sum(history['population'][-window:]) / window
+            pop_old = sum(history['population'][-2*window:-window]) / window if len(history['population']) >= 2*window else pop_recent
+            pop_trend = "↑" if pop_recent > pop_old * 1.05 else "↓" if pop_recent < pop_old * 0.95 else "→"
+
+            # Diversity trend
+            if len(history['diversity']) >= window:
+                div_recent = sum(history['diversity'][-window:]) / window
+                div_old = sum(history['diversity'][-2*window:-window]) / window if len(history['diversity']) >= 2*window else div_recent
+                div_trend = "↑" if div_recent > div_old * 1.05 else "↓" if div_recent < div_old * 0.95 else "→"
+            else:
+                div_recent = 0
+                div_trend = "→"
+
+            # Fitness trend
+            if len(history['avg_fitness']) >= window:
+                fit_recent = sum(history['avg_fitness'][-window:]) / window
+                fit_old = sum(history['avg_fitness'][-2*window:-window]) / window if len(history['avg_fitness']) >= 2*window else fit_recent
+                fit_trend = "↑" if fit_recent > fit_old * 1.05 else "↓" if fit_recent < fit_old * 0.95 else "→"
+            else:
+                fit_recent = 0
+                fit_trend = "→"
+
+            trend_lines = [
+                f"Population: {pop_recent:.0f} {pop_trend}",
+                f"Diversity: {div_recent:.2f} {div_trend}",
+                f"Avg Fitness: {fit_recent:.1f} {fit_trend}",
+            ]
+
+            for line in trend_lines:
+                text = self.font_small.render(line, True, COLOR_TEXT)
+                self.stats_surface.blit(text, (10, y_offset))
+                y_offset += 22
+
         # Show emergent species groups
         y_offset += 10
         title = self.font_medium.render('Genome Clusters', True, COLOR_TEXT)

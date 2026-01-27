@@ -417,7 +417,15 @@ class GPULifeGame:
         # Initialize color cache for rendering optimization
         self.update_color_cache()
 
-        self.history = {'population': []}
+        # Evolution history for real-time charts
+        self.history = {
+            'population': [],
+            'avg_fitness': [],
+            'diversity': [],  # Average genome distance
+            'trained_ratio': [],  # Percentage of trained lineage
+            'avg_energy': [],
+            'generation': []
+        }
 
     # -------------------------------------------------------------------------
     # Weight Persistence
@@ -901,14 +909,67 @@ class GPULifeGame:
 
         self.generation += 1
 
-        # Statistics (simple population count)
+        # Statistics tracking for evolution curves
+        self._update_history_stats()
+
+    def _update_history_stats(self):
+        """Update evolution history with current generation statistics."""
         total = self.alive.sum().item()
+
+        # Track generation number
+        self.history['generation'].append(self.generation)
+
+        # Track population
         self.history['population'].append(total)
 
+        if total > 0:
+            # Track average fitness
+            fitness = self._calculate_fitness()
+            avg_fitness = fitness[self.alive].mean().item()
+            self.history['avg_fitness'].append(avg_fitness)
+
+            # Track diversity (average pairwise genome distance)
+            alive_genomes = self.genome[self.alive]
+            if len(alive_genomes) > 1:
+                # Sample a subset for efficiency (calculating all pairs is O(N^2))
+                n_sample = min(len(alive_genomes), 200)
+                sample_indices = torch.randperm(len(alive_genomes), device=DEVICE)[:n_sample]
+                sample_genomes = alive_genomes[sample_indices]
+
+                # Calculate pairwise distances
+                # distances[i,j] = ||genome[i] - genome[j]||
+                expanded1 = sample_genomes.unsqueeze(1)  # [N, 1, 12]
+                expanded2 = sample_genomes.unsqueeze(0)  # [1, N, 12]
+                distances = torch.norm(expanded1 - expanded2, dim=2)  # [N, N]
+
+                # Average distance (excluding diagonal)
+                mask = ~torch.eye(n_sample, dtype=torch.bool, device=DEVICE)
+                avg_diversity = distances[mask].mean().item()
+                self.history['diversity'].append(avg_diversity)
+            else:
+                self.history['diversity'].append(0.0)
+
+            # Track trained lineage ratio
+            trained_count = (self.alive & (self.trained_generation >= 0)).sum().item()
+            trained_ratio = trained_count / total if total > 0 else 0.0
+            self.history['trained_ratio'].append(trained_ratio)
+
+            # Track average energy
+            avg_energy = self.energy[self.alive].mean().item()
+            self.history['avg_energy'].append(avg_energy)
+        else:
+            # No alive cells, append zeros
+            self.history['avg_fitness'].append(0.0)
+            self.history['diversity'].append(0.0)
+            self.history['trained_ratio'].append(0.0)
+            self.history['avg_energy'].append(0.0)
+
         # Sliding window: trim old history to reduce memory
-        if HISTORY_WINDOW > 0 and len(self.history['population']) > HISTORY_WINDOW:
-            trim = len(self.history['population']) - HISTORY_WINDOW
-            self.history['population'] = self.history['population'][trim:]
+        if HISTORY_WINDOW > 0:
+            for key in self.history:
+                if len(self.history[key]) > HISTORY_WINDOW:
+                    trim = len(self.history[key]) - HISTORY_WINDOW
+                    self.history[key] = self.history[key][trim:]
 
     def _parallel_actions(self, actions):
         """Execute all actions in parallel (optimized: reduced .any() calls, shared random tensor)."""
