@@ -62,6 +62,15 @@ SPECIES_STARVATION = 100
 SPECIES_HIDDEN_SIZE = 8
 HIDDEN_SIZE_INCREMENT = 2  # Neurons added on speciation
 MAX_HIDDEN_SIZE = 240       # Maximum hidden layer size
+MIN_HIDDEN_SIZE = 4         # Minimum hidden layer size
+
+# Random mutation
+MUTATION_INTERVAL = 10      # Check for random mutation every N generations
+RANDOM_MUTATION_CHANCE = 0.1  # Probability per species per check
+
+# Performance tuning
+HISTORY_WINDOW = 1000       # Keep only last N generations in history (0 = unlimited)
+RENDER_INTERVAL = 1         # Render every N frames (increase for faster simulation)
 
 # Combat
 ATTACK_BONUS = 1.2  # Energy multiplier when eating prey
@@ -127,8 +136,17 @@ def create_species_config(sp_id: int, num_total: int, name: str = None) -> dict:
     }
 
 
-def add_new_species(parent_id: int) -> int:
-    """Create a new species by splitting from a parent species."""
+def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREMENT) -> int:
+    """
+    Create a new child species from a parent species.
+
+    Args:
+        parent_id: The ID of the parent species
+        hidden_delta: Change in hidden layer size (can be positive or negative)
+
+    Returns:
+        The ID of the new species, or None if max species reached
+    """
     new_id = len(SPECIES_CONFIG)
     if new_id >= MAX_SPECIES:
         return None
@@ -142,9 +160,9 @@ def add_new_species(parent_id: int) -> int:
     new_config = create_species_config(new_id, new_id + 1, name=new_name)
     new_config['parent'] = parent_id
 
-    # New species gets more hidden neurons (evolution of complexity)
+    # Apply hidden layer delta (can gain or lose neurons)
     parent_hidden = SPECIES_CONFIG[parent_id]['hidden_size']
-    new_hidden = min(parent_hidden + HIDDEN_SIZE_INCREMENT, MAX_HIDDEN_SIZE)
+    new_hidden = max(MIN_HIDDEN_SIZE, min(parent_hidden + hidden_delta, MAX_HIDDEN_SIZE))
     new_config['hidden_size'] = new_hidden
 
     SPECIES_CONFIG.append(new_config)
@@ -158,6 +176,11 @@ def add_new_species(parent_id: int) -> int:
     SPECIES_TENSORS = build_species_tensors()
 
     return new_id
+
+
+def add_new_species(parent_id: int) -> int:
+    """Create a new species by splitting (always gains neurons). Kept for backward compatibility."""
+    return create_child_species(parent_id, hidden_delta=HIDDEN_SIZE_INCREMENT)
 
 
 # Initialize species
@@ -495,7 +518,10 @@ class GPULifeGame:
         # RL update
         self._apply_rl_update()
 
-        # Species splitting
+        # Random mutation (every MUTATION_INTERVAL generations)
+        self._check_random_mutation()
+
+        # Species splitting (dominant species)
         self._check_and_split_dominant_species()
 
         # Save best network periodically
@@ -518,68 +544,75 @@ class GPULifeGame:
             self.history['species'][sp_id].append(counts[sp_id].item())
         self.history['population'].append(total)
 
+        # Sliding window: trim old history to reduce memory
+        if HISTORY_WINDOW > 0 and len(self.history['population']) > HISTORY_WINDOW:
+            trim = len(self.history['population']) - HISTORY_WINDOW
+            self.history['population'] = self.history['population'][trim:]
+            for sp_id in range(len(self.history['species'])):
+                if len(self.history['species'][sp_id]) > HISTORY_WINDOW:
+                    self.history['species'][sp_id] = self.history['species'][sp_id][trim:]
+
     def _parallel_actions(self, actions):
-        """Execute all actions in parallel."""
-        # Movement
+        """Execute all actions in parallel (optimized: reduced .any() calls, shared random tensor)."""
+        # Pre-generate shared random tensor for movement/reproduction
+        rand_shared = torch.rand((self.size, self.size), device=DEVICE)
+
+        # Movement (unified loop, removed .any() checks)
         for action, (dr, dc) in [(ACTION_UP, (-1, 0)), (ACTION_DOWN, (1, 0)),
                                   (ACTION_LEFT, (0, -1)), (ACTION_RIGHT, (0, 1))]:
             is_this_move = self.alive & (actions == action)
-            if not is_this_move.any():
-                continue
 
+            # Apply move cost (no-op if mask is empty)
             self.energy = torch.where(is_this_move, self.energy - MOVE_COST, self.energy)
             target_r = (self.rows + dr) % self.size
             target_c = (self.cols + dc) % self.size
             can_move = is_this_move & ~self.alive[target_r, target_c]
-            random_pass = torch.rand((self.size, self.size), device=DEVICE) > 0.5
-            winner = can_move & random_pass
+            winner = can_move & (rand_shared > 0.5)
 
-            if winner.any():
-                move_energy = self.energy[winner]
-                move_species = self.species[winner]
-                move_hunger = self.hunger[winner]
-                move_w1 = self.w1[winner]
-                move_w2 = self.w2[winner]
+            # Direct tensor indexing (empty mask = no-op, no .any() needed)
+            move_energy = self.energy[winner]
+            move_species = self.species[winner]
+            move_hunger = self.hunger[winner]
+            move_w1 = self.w1[winner]
+            move_w2 = self.w2[winner]
 
-                self.alive[winner] = False
-                self.energy[winner] = 0
+            self.alive[winner] = False
+            self.energy[winner] = 0
 
-                new_r = target_r[winner]
-                new_c = target_c[winner]
-                self.alive[new_r, new_c] = True
-                self.energy[new_r, new_c] = move_energy
-                self.species[new_r, new_c] = move_species
-                self.hunger[new_r, new_c] = move_hunger
-                self.w1[new_r, new_c] = move_w1
-                self.w2[new_r, new_c] = move_w2
+            new_r = target_r[winner]
+            new_c = target_c[winner]
+            self.alive[new_r, new_c] = True
+            self.energy[new_r, new_c] = move_energy
+            self.species[new_r, new_c] = move_species
+            self.hunger[new_r, new_c] = move_hunger
+            self.w1[new_r, new_c] = move_w1
+            self.w2[new_r, new_c] = move_w2
 
-        # Eating
+        # Eating (always call, method handles empty mask efficiently)
         is_eat = self.alive & (actions == ACTION_EAT)
-        if is_eat.any():
-            self._parallel_eat(is_eat)
+        self._parallel_eat(is_eat)
 
-        # Reproduction
+        # Reproduction (always call, method handles empty mask efficiently)
         repro_threshold = self._get_species_param_fast(SPECIES_TENSORS['repro_threshold'])
         is_reproduce = self.alive & (actions == ACTION_REPRODUCE) & (self.energy >= repro_threshold)
-        if is_reproduce.any():
-            self._parallel_reproduce(is_reproduce)
+        self._parallel_reproduce(is_reproduce, rand_shared)
 
     def _parallel_eat(self, is_eat):
-        """Handle predation between species."""
+        """Handle predation between species (optimized: unified loop, reduced .any() calls)."""
         my_species = self.species
 
-        dirs_basic = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        dirs_extended = [(-1, -1), (-1, 1), (1, -1), (1, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]
+        # All directions in priority order (basic first, then extended)
+        all_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1),  # basic
+                    (-1, -1), (-1, 1), (1, -1), (1, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]  # extended
 
-        # Build predator mask
-        has_prey_mask = torch.zeros_like(my_species, dtype=torch.bool)
-        for sp_id in range(len(SPECIES_CONFIG)):
-            if SPECIES_CONFIG[sp_id]['prey']:
-                has_prey_mask = has_prey_mask | (my_species == sp_id)
-        predator_eat = is_eat & has_prey_mask
+        # Build predator mask using vectorized lookup (all species with prey can hunt)
+        # Since all species can hunt all others, this is just alive & is_eat
+        predator_eat = is_eat
 
-        # Process basic directions first
-        for dr, dc in dirs_basic:
+        # Pre-generate single random tensor for all directions (reused)
+        rand_attack = torch.rand((self.size, self.size), device=DEVICE)
+
+        for dr, dc in all_dirs:
             neighbor_r = (self.rows + dr) % self.size
             neighbor_c = (self.cols + dc) % self.size
             neighbor_alive = self.alive[neighbor_r, neighbor_c]
@@ -588,59 +621,28 @@ class GPULifeGame:
 
             is_valid_prey = self._is_valid_prey_fast(my_species, neighbor_species)
             can_attack = predator_eat & neighbor_alive & is_valid_prey
-            attack_success = torch.rand_like(self.energy) < 0.5
+            attack_success = rand_attack < 0.5
             can_eat = can_attack & attack_success
-
-            # Reward for escaping
             escaped = can_attack & ~attack_success
-            if escaped.any():
-                escape_prey_r = neighbor_r[escaped]
-                escape_prey_c = neighbor_c[escaped]
-                self.reward[escape_prey_r, escape_prey_c] += REWARD_SURVIVE_ATTACK
 
-            if can_eat.any():
-                gained = neighbor_energy[can_eat] * ATTACK_BONUS
-                self.energy[can_eat] = torch.clamp(self.energy[can_eat] + gained, max=MAX_ENERGY)
-                self.hunger[can_eat] = 0
-                self.reward[can_eat] += REWARD_EAT_PREY
-                prey_r = neighbor_r[can_eat]
-                prey_c = neighbor_c[can_eat]
-                self.alive[prey_r, prey_c] = False
-                self.energy[prey_r, prey_c] = 0
-                predator_eat = predator_eat & ~can_eat
+            # Reward escaping prey (direct tensor operation, no .any() check)
+            escape_prey_r = neighbor_r[escaped]
+            escape_prey_c = neighbor_c[escaped]
+            self.reward[escape_prey_r, escape_prey_c] += REWARD_SURVIVE_ATTACK
 
-        # Extended directions (diagonal and long-range)
-        for dr, dc in dirs_extended:
-            neighbor_r = (self.rows + dr) % self.size
-            neighbor_c = (self.cols + dc) % self.size
-            neighbor_alive = self.alive[neighbor_r, neighbor_c]
-            neighbor_species = self.species[neighbor_r, neighbor_c]
-            neighbor_energy = self.energy[neighbor_r, neighbor_c]
+            # Process successful hunts (direct tensor operation, no .any() check)
+            gained = neighbor_energy[can_eat] * ATTACK_BONUS
+            self.energy[can_eat] = torch.clamp(self.energy[can_eat] + gained, max=MAX_ENERGY)
+            self.hunger[can_eat] = 0
+            self.reward[can_eat] += REWARD_EAT_PREY
+            prey_r = neighbor_r[can_eat]
+            prey_c = neighbor_c[can_eat]
+            self.alive[prey_r, prey_c] = False
+            self.energy[prey_r, prey_c] = 0
+            predator_eat = predator_eat & ~can_eat
 
-            is_valid_prey = self._is_valid_prey_fast(my_species, neighbor_species)
-            can_attack = predator_eat & neighbor_alive & is_valid_prey
-            attack_success = torch.rand_like(self.energy) < 0.5
-            can_eat = can_attack & attack_success
-
-            escaped = can_attack & ~attack_success
-            if escaped.any():
-                escape_prey_r = neighbor_r[escaped]
-                escape_prey_c = neighbor_c[escaped]
-                self.reward[escape_prey_r, escape_prey_c] += REWARD_SURVIVE_ATTACK
-
-            if can_eat.any():
-                gained = neighbor_energy[can_eat] * ATTACK_BONUS
-                self.energy[can_eat] = torch.clamp(self.energy[can_eat] + gained, max=MAX_ENERGY)
-                self.hunger[can_eat] = 0
-                self.reward[can_eat] += REWARD_EAT_PREY
-                prey_r = neighbor_r[can_eat]
-                prey_c = neighbor_c[can_eat]
-                self.alive[prey_r, prey_c] = False
-                self.energy[prey_r, prey_c] = 0
-                predator_eat = predator_eat & ~can_eat
-
-    def _parallel_reproduce(self, is_reproduce):
-        """Handle reproduction with inheritance and mutation (CUDA optimized)."""
+    def _parallel_reproduce(self, is_reproduce, rand_shared=None):
+        """Handle reproduction with inheritance and mutation (optimized: reduced .any() calls)."""
         dirs = [(-1, 0), (1, 0), (0, -1), (0, 1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
 
         # Vectorized parameter lookups
@@ -648,37 +650,38 @@ class GPULifeGame:
         repro_cost = self._get_species_param_fast(SPECIES_TENSORS['repro_cost'])
         offspring_energy = self._get_species_param_fast(SPECIES_TENSORS['offspring_energy'])
 
+        # Use shared random or generate new
+        if rand_shared is None:
+            rand_shared = torch.rand((self.size, self.size), device=DEVICE)
+
         for dr, dc in dirs:
             target_r = (self.rows + dr) % self.size
             target_c = (self.cols + dc) % self.size
             target_empty = ~self.alive[target_r, target_c]
             can_reproduce = is_reproduce & target_empty & (self.energy >= repro_threshold)
+            winner = can_reproduce & (rand_shared > 0.5)
 
-            if can_reproduce.any():
-                random_pass = torch.rand((self.size, self.size), device=DEVICE) > 0.5
-                winner = can_reproduce & random_pass
+            # Direct tensor operations (empty mask = no-op, no .any() check needed)
+            self.energy[winner] -= repro_cost[winner]
+            self.reward[winner] += REWARD_REPRODUCE
+            self.repro_count[winner] += 1
 
-                if winner.any():
-                    self.energy[winner] -= repro_cost[winner]
-                    self.reward[winner] += REWARD_REPRODUCE
-                    self.repro_count[winner] += 1
+            child_r = target_r[winner]
+            child_c = target_c[winner]
+            self.alive[child_r, child_c] = True
+            self.energy[child_r, child_c] = offspring_energy[winner]
+            self.species[child_r, child_c] = self.species[winner]
+            self.hunger[child_r, child_c] = 0
+            self.is_newborn[child_r, child_c] = True
 
-                    child_r = target_r[winner]
-                    child_c = target_c[winner]
-                    self.alive[child_r, child_c] = True
-                    self.energy[child_r, child_c] = offspring_energy[winner]
-                    self.species[child_r, child_c] = self.species[winner]
-                    self.hunger[child_r, child_c] = 0
-                    self.is_newborn[child_r, child_c] = True
+            # Inheritance with mutation
+            self.w1[child_r, child_c] = self.w1[winner] + torch.randn_like(self.w1[winner]) * MUTATION_RATE
+            self.w2[child_r, child_c] = self.w2[winner] + torch.randn_like(self.w2[winner]) * MUTATION_RATE
 
-                    # Inheritance with mutation
-                    self.w1[child_r, child_c] = self.w1[winner] + torch.randn_like(self.w1[winner]) * MUTATION_RATE
-                    self.w2[child_r, child_c] = self.w2[winner] + torch.randn_like(self.w2[winner]) * MUTATION_RATE
-
-                    self.reward[child_r, child_c] = 0
-                    self.lifetime[child_r, child_c] = 0
-                    self.repro_count[child_r, child_c] = 0
-                    is_reproduce = is_reproduce & ~winner
+            self.reward[child_r, child_c] = 0
+            self.lifetime[child_r, child_c] = 0
+            self.repro_count[child_r, child_c] = 0
+            is_reproduce = is_reproduce & ~winner
 
     def _apply_rl_update(self):
         """Apply policy gradient updates based on rewards (CUDA optimized - fully vectorized)."""
@@ -725,6 +728,75 @@ class GPULifeGame:
         self.w1[rows, cols] += delta_w1
 
         self.reward.fill_(0)
+
+    def _check_random_mutation(self):
+        """
+        Check for random mutations every MUTATION_INTERVAL generations.
+        Each alive species has RANDOM_MUTATION_CHANCE to spawn a mutant species.
+        Mutants can gain or lose neurons.
+        """
+        if self.generation % MUTATION_INTERVAL != 0 or self.generation == 0:
+            return
+
+        # Get alive species (those with at least 1 member)
+        alive_species_mask = self.species[self.alive]
+        if len(alive_species_mask) == 0:
+            return
+
+        counts = torch.bincount(alive_species_mask.long(), minlength=MAX_SPECIES)
+
+        for sp_id in range(len(SPECIES_CONFIG)):
+            if counts[sp_id].item() == 0:
+                continue  # Skip extinct species
+
+            if np.random.random() > RANDOM_MUTATION_CHANCE:
+                continue  # No mutation this time
+
+            # Random hidden delta: +/- HIDDEN_SIZE_INCREMENT (with slight bias toward gain)
+            if np.random.random() < 0.6:
+                hidden_delta = HIDDEN_SIZE_INCREMENT  # 60% chance to gain
+            else:
+                hidden_delta = -HIDDEN_SIZE_INCREMENT  # 40% chance to lose
+
+            new_species_id = create_child_species(sp_id, hidden_delta=hidden_delta)
+            if new_species_id is None:
+                continue  # Max species reached
+
+            parent_name = SPECIES_CONFIG[sp_id]['name']
+            new_name = SPECIES_CONFIG[new_species_id]['name']
+            parent_hidden = SPECIES_CONFIG[sp_id]['hidden_size']
+            new_hidden = SPECIES_CONFIG[new_species_id]['hidden_size']
+            delta_str = f"+{hidden_delta}" if hidden_delta > 0 else str(hidden_delta)
+
+            print(f"\n[MUTATION] Random mutation in {parent_name}")
+            print(f"           New species: {new_name}")
+            print(f"           Hidden neurons: {parent_hidden} -> {new_hidden} ({delta_str})")
+            print(f"           Total species: {len(SPECIES_CONFIG)}")
+
+            # Add history tracking for new species
+            self.history['species'].append([0] * len(self.history['population']))
+
+            # Convert some members of parent species to new species
+            parent_mask = (self.species == sp_id) & self.alive
+            parent_positions = parent_mask.nonzero(as_tuple=False)
+
+            if len(parent_positions) > 0:
+                # 20% of parent species become the new mutant species
+                num_to_convert = max(1, len(parent_positions) // 5)
+                perm = torch.randperm(len(parent_positions), device=DEVICE)
+                convert_indices = parent_positions[perm[:num_to_convert]]
+
+                convert_r = convert_indices[:, 0]
+                convert_c = convert_indices[:, 1]
+                self.species[convert_r, convert_c] = new_species_id
+
+                # Apply mutation to neural network weights
+                mutation_w1 = torch.randn_like(self.w1[convert_r, convert_c]) * SPLIT_MUTATION_RATE
+                mutation_w2 = torch.randn_like(self.w2[convert_r, convert_c]) * SPLIT_MUTATION_RATE
+                self.w1[convert_r, convert_c] += mutation_w1
+                self.w2[convert_r, convert_c] += mutation_w2
+
+                print(f"           {num_to_convert} cells become {new_name}")
 
     def _check_and_split_dominant_species(self):
         """Split dominant species to maintain ecosystem diversity (CUDA optimized)."""
@@ -858,11 +930,18 @@ def print_system_info():
     print(f"  Splits when single species exceeds {DOMINANCE_THRESHOLD*100:.0f}%")
     print(f"  Split mutation rate: {SPLIT_MUTATION_RATE}")
     print(f"  Initial species: {INITIAL_NUM_SPECIES}, Max species: {MAX_SPECIES}")
-    print(f"  Hidden neurons: {SPECIES_HIDDEN_SIZE} -> +{HIDDEN_SIZE_INCREMENT}/split (max {MAX_HIDDEN_SIZE})")
+    print(f"  Hidden neurons: {SPECIES_HIDDEN_SIZE} -> +/-{HIDDEN_SIZE_INCREMENT}/mutation (range {MIN_HIDDEN_SIZE}-{MAX_HIDDEN_SIZE})")
+    print(f"\n[Random Mutation]")
+    print(f"  Check every {MUTATION_INTERVAL} generations")
+    print(f"  {RANDOM_MUTATION_CHANCE*100:.0f}% chance per species per check")
+    print(f"  60% gain neurons, 40% lose neurons")
     print(f"\n[Network Persistence]")
     print(f"  Save best network every {SAVE_INTERVAL} generations to: {SAVE_FILE}")
     print(f"  Fitness = lifetime + reproduction_count * 10")
     print(f"  {ELITE_RATIO*100:.0f}% of initial cells inherit saved weights")
+    print(f"\n[Performance]")
+    print(f"  History window: {HISTORY_WINDOW if HISTORY_WINDOW > 0 else 'unlimited'} generations")
+    print(f"  Render interval: {RENDER_INTERVAL} step(s) per frame")
     print("=" * 60 + "\n")
 
 
@@ -928,7 +1007,11 @@ def main():
         nonlocal species_lines, global_species_lines
 
         start = time.time()
-        game.step()
+        # Run multiple steps per frame for faster simulation
+        for _ in range(RENDER_INTERVAL):
+            game.step()
+            if game.is_extinct():
+                break
         elapsed = time.time() - start
 
         # Add new species lines if needed
@@ -947,16 +1030,23 @@ def main():
         img_display.set_array(game.render())
         ax_main.set_title(f'Digital Primordial Soup {mode_str} - Gen {game.generation} ({len(SPECIES_CONFIG)} species)')
 
-        # Update charts
-        gens = list(range(len(game.history['population'])))
+        # Update charts (handle sliding window: x-axis starts from actual generation)
+        history_len = len(game.history['population'])
+        if HISTORY_WINDOW > 0 and history_len > 0:
+            # With sliding window, x starts from (current_gen - history_len + 1)
+            start_gen = game.generation - history_len + 1
+            gens = list(range(start_gen, game.generation + 1))
+        else:
+            gens = list(range(history_len))
+
         for sp_id in range(len(species_lines)):
             if sp_id < len(game.history['species']):
                 species_lines[sp_id].set_data(gens, game.history['species'][sp_id])
         line_total.set_data(gens, game.history['population'])
 
-        if len(gens) > 100:
-            ax_stats.set_xlim(len(gens) - 100, len(gens))
-        ax_global.set_xlim(0, max(len(gens), 100))
+        if history_len > 100:
+            ax_stats.set_xlim(gens[-100] if len(gens) >= 100 else gens[0], gens[-1] if gens else 100)
+        ax_global.set_xlim(gens[0] if gens else 0, max(gens[-1] if gens else 100, 100))
 
         if game.history['population']:
             max_pop = max(game.history['population']) * 1.2
