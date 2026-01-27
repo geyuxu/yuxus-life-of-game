@@ -494,6 +494,113 @@ class GPULifeGame:
         # Queue for async save (non-blocking)
         ASYNC_SAVER.save_async(checkpoint, SAVE_FILE)
 
+    def save_checkpoint(self, filepath: str = "checkpoint.pt"):
+        """
+        Save complete simulation state to file.
+
+        Saves all tensors, generation state, history, and best network info.
+        This allows resuming the exact simulation state later.
+
+        Args:
+            filepath: Path to save checkpoint (default: checkpoint.pt)
+        """
+        print(f"[CHECKPOINT] Saving complete state to {filepath}...")
+
+        checkpoint = {
+            # Core state tensors
+            'alive': self.alive.cpu(),
+            'energy': self.energy.cpu(),
+            'hunger': self.hunger.cpu(),
+            'is_newborn': self.is_newborn.cpu(),
+            'genome': self.genome.cpu(),
+            'w1': self.w1.cpu(),
+            'w2': self.w2.cpu(),
+            'trained_generation': self.trained_generation.cpu(),
+
+            # RL state
+            'reward': self.reward.cpu(),
+            'last_action': self.last_action.cpu(),
+            'last_action_logprob': self.last_action_logprob.cpu(),
+            'last_inputs': self.last_inputs.cpu(),
+            'last_hidden': self.last_hidden.cpu(),
+
+            # Fitness tracking
+            'lifetime': self.lifetime.cpu(),
+            'repro_count': self.repro_count.cpu(),
+            'best_fitness': self.best_fitness,
+            'best_w1': self.best_w1.cpu() if self.best_w1 is not None else None,
+            'best_w2': self.best_w2.cpu() if self.best_w2 is not None else None,
+            'best_hidden_size': self.best_hidden_size,
+
+            # Chemical field
+            'chemicals': self.chemicals.cpu(),
+
+            # Simulation state
+            'generation': self.generation,
+            'history': self.history,
+            'size': self.size,
+        }
+
+        torch.save(checkpoint, filepath)
+        print(f"[CHECKPOINT] Saved generation {self.generation} to {filepath}")
+
+    def load_checkpoint(self, filepath: str = "checkpoint.pt"):
+        """
+        Load complete simulation state from file.
+
+        Restores all tensors, generation state, and history.
+
+        Args:
+            filepath: Path to load checkpoint from (default: checkpoint.pt)
+        """
+        if not os.path.exists(filepath):
+            print(f"[ERROR] Checkpoint file not found: {filepath}")
+            return False
+
+        print(f"[CHECKPOINT] Loading state from {filepath}...")
+
+        checkpoint = torch.load(filepath, map_location=DEVICE)
+
+        # Restore all state tensors
+        self.alive = checkpoint['alive'].to(DEVICE)
+        self.energy = checkpoint['energy'].to(DEVICE)
+        self.hunger = checkpoint['hunger'].to(DEVICE)
+        self.is_newborn = checkpoint['is_newborn'].to(DEVICE)
+        self.genome = checkpoint['genome'].to(DEVICE)
+        self.w1 = checkpoint['w1'].to(DEVICE)
+        self.w2 = checkpoint['w2'].to(DEVICE)
+        self.trained_generation = checkpoint['trained_generation'].to(DEVICE)
+
+        # Restore RL state
+        self.reward = checkpoint['reward'].to(DEVICE)
+        self.last_action = checkpoint['last_action'].to(DEVICE)
+        self.last_action_logprob = checkpoint['last_action_logprob'].to(DEVICE)
+        self.last_inputs = checkpoint['last_inputs'].to(DEVICE)
+        self.last_hidden = checkpoint['last_hidden'].to(DEVICE)
+
+        # Restore fitness tracking
+        self.lifetime = checkpoint['lifetime'].to(DEVICE)
+        self.repro_count = checkpoint['repro_count'].to(DEVICE)
+        self.best_fitness = checkpoint['best_fitness']
+        self.best_w1 = checkpoint['best_w1'].to(DEVICE) if checkpoint['best_w1'] is not None else None
+        self.best_w2 = checkpoint['best_w2'].to(DEVICE) if checkpoint['best_w2'] is not None else None
+        self.best_hidden_size = checkpoint['best_hidden_size']
+
+        # Restore chemical field
+        self.chemicals = checkpoint['chemicals'].to(DEVICE)
+
+        # Restore simulation state
+        self.generation = checkpoint['generation']
+        self.history = checkpoint['history']
+        self.size = checkpoint['size']
+
+        # Update color cache after loading
+        self.update_color_cache()
+
+        print(f"[CHECKPOINT] Loaded generation {self.generation} from {filepath}")
+        print(f"[CHECKPOINT] Population: {self.alive.sum().item()}")
+        return True
+
     def _calculate_fitness(self):
         """
         Calculate multi-objective fitness for all cells.

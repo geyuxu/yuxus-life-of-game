@@ -13,6 +13,8 @@ Controls:
 - SPACE: Pause/Resume
 - R: Reset simulation
 - S: Save best network manually
+- Ctrl+S: Save complete checkpoint
+- Ctrl+L: Load checkpoint
 - C: Toggle chemical overlay
 - G: Toggle grid
 - H: Toggle genome heatmap
@@ -695,10 +697,25 @@ class PyGameRenderer:
                     self.simulation_speed = max(0, self.simulation_speed - 1)
                     print(f"Speed: {self.simulation_speed}x")
                 elif event.key == pygame.K_s:
-                    # Manual save
-                    self.game._update_best_network()
-                    self.game._save_best_weights()
-                    print(f"[MANUAL SAVE] Gen {self.game.generation}, Fitness={self.game.best_fitness:.1f}")
+                    # Check for Ctrl modifier
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_CTRL:
+                        # Ctrl+S: Save complete checkpoint
+                        self.game.save_checkpoint()
+                    else:
+                        # S alone: Manual save best weights
+                        self.game._update_best_network()
+                        self.game._save_best_weights()
+                        print(f"[MANUAL SAVE] Gen {self.game.generation}, Fitness={self.game.best_fitness:.1f}")
+                elif event.key == pygame.K_l:
+                    # Ctrl+L: Load checkpoint
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_CTRL:
+                        success = self.game.load_checkpoint()
+                        if success:
+                            print("Checkpoint loaded successfully!")
+                        else:
+                            print("Failed to load checkpoint")
                 # Parameter selection (1-4)
                 elif event.key == pygame.K_1:
                     self.selected_param = 'mutation_rate'
