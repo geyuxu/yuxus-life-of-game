@@ -16,6 +16,8 @@ Controls:
 - C: Toggle chemical overlay
 - G: Toggle grid
 - H: Toggle genome heatmap
+- 1-4: Select parameter (Mutation, RL Rate, Repro, Metabolism)
+- ↑↓: Adjust selected parameter
 - +/-: Adjust simulation speed
 - Mouse wheel: Zoom
 - Click+Drag: Pan camera
@@ -72,6 +74,15 @@ class PyGameRenderer:
         self.show_genome_heatmap = False  # Genome heatmap disabled by default (press H to toggle)
         self.chemical_alpha = 0.5
         self.simulation_speed = 1  # Steps per frame
+
+        # Real-time parameter adjustment
+        self.adjustable_params = {
+            'mutation_rate': {'value': 0.1, 'min': 0.0, 'max': 0.5, 'step': 0.01, 'name': 'Mutation Rate'},
+            'rl_learning_rate': {'value': 0.01, 'min': 0.0, 'max': 0.1, 'step': 0.001, 'name': 'RL Learning Rate'},
+            'repro_threshold': {'value': 20, 'min': 10, 'max': 50, 'step': 1, 'name': 'Repro Threshold'},
+            'metabolism': {'value': 0.1, 'min': 0.05, 'max': 0.3, 'step': 0.01, 'name': 'Metabolism'},
+        }
+        self.selected_param = None  # Currently selected parameter for adjustment
 
         # Camera
         self.camera_zoom = 1.0
@@ -592,8 +603,53 @@ class PyGameRenderer:
             self.stats_surface.blit(text, (30, y_offset))
             y_offset += 20
 
+        # Real-time parameter adjustment panel
+        y_offset += 10
+        title = self.font_medium.render('Parameters (1-4 + ↑↓)', True, COLOR_TEXT)
+        self.stats_surface.blit(title, (10, y_offset))
+        y_offset += 30
+
+        param_keys = ['mutation_rate', 'rl_learning_rate', 'repro_threshold', 'metabolism']
+        for idx, key in enumerate(param_keys):
+            param = self.adjustable_params[key]
+            is_selected = (self.selected_param == key)
+
+            # Highlight selected parameter
+            bg_color = (60, 60, 80) if is_selected else COLOR_PANEL
+            bg_rect = pygame.Rect(5, y_offset - 2, 340, 20)
+            pygame.draw.rect(self.stats_surface, bg_color, bg_rect)
+
+            # Parameter name and value
+            text_color = (255, 255, 100) if is_selected else COLOR_TEXT
+            param_text = f"{idx+1}. {param['name']}: {param['value']:.3f}"
+            text = self.font_small.render(param_text, True, text_color)
+            self.stats_surface.blit(text, (10, y_offset))
+
+            y_offset += 22
+
+        # Instructions
+        if self.selected_param:
+            y_offset += 5
+            instr_text = "Use ↑↓ to adjust"
+            text = self.font_small.render(instr_text, True, (150, 150, 150))
+            self.stats_surface.blit(text, (10, y_offset))
+
         # Copy to main window
         self.window.blit(self.stats_surface, (self.stats_panel_x, 0))
+
+    def _apply_parameter_changes(self):
+        """Apply real-time parameter changes to the simulation."""
+        import config
+
+        # Update config module values
+        if self.selected_param == 'mutation_rate':
+            config.MUTATION_RATE = self.adjustable_params['mutation_rate']['value']
+        elif self.selected_param == 'rl_learning_rate':
+            config.RL_LEARNING_RATE = self.adjustable_params['rl_learning_rate']['value']
+        elif self.selected_param == 'repro_threshold':
+            config.SPECIES_REPRO_THRESHOLD = int(self.adjustable_params['repro_threshold']['value'])
+        elif self.selected_param == 'metabolism':
+            config.SPECIES_METABOLISM = self.adjustable_params['metabolism']['value']
 
     def render_header(self):
         """Render header bar."""
@@ -643,6 +699,30 @@ class PyGameRenderer:
                     self.game._update_best_network()
                     self.game._save_best_weights()
                     print(f"[MANUAL SAVE] Gen {self.game.generation}, Fitness={self.game.best_fitness:.1f}")
+                # Parameter selection (1-4)
+                elif event.key == pygame.K_1:
+                    self.selected_param = 'mutation_rate'
+                    print(f"Selected: Mutation Rate")
+                elif event.key == pygame.K_2:
+                    self.selected_param = 'rl_learning_rate'
+                    print(f"Selected: RL Learning Rate")
+                elif event.key == pygame.K_3:
+                    self.selected_param = 'repro_threshold'
+                    print(f"Selected: Repro Threshold")
+                elif event.key == pygame.K_4:
+                    self.selected_param = 'metabolism'
+                    print(f"Selected: Metabolism")
+                # Parameter adjustment (arrow keys)
+                elif event.key == pygame.K_UP and self.selected_param:
+                    param = self.adjustable_params[self.selected_param]
+                    param['value'] = min(param['max'], param['value'] + param['step'])
+                    self._apply_parameter_changes()
+                    print(f"{param['name']}: {param['value']:.3f}")
+                elif event.key == pygame.K_DOWN and self.selected_param:
+                    param = self.adjustable_params[self.selected_param]
+                    param['value'] = max(param['min'], param['value'] - param['step'])
+                    self._apply_parameter_changes()
+                    print(f"{param['name']}: {param['value']:.3f}")
 
             elif event.type == pygame.MOUSEWHEEL:
                 # Zoom
