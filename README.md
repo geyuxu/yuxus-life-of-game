@@ -1,27 +1,37 @@
-# Digital Primordial Soup
+# Neuroevolution Arena
 
-A GPU-accelerated artificial life simulation where neural network-driven organisms compete for survival through predation, reproduction, and evolution.
+A GPU-accelerated genome-based evolution simulation where neural network organisms compete, reproduce, and evolve through natural selection.
 
 ## Features
 
-- **Neuroevolution**: Each organism has its own neural network that controls behavior. Weights are inherited and mutated during reproduction
-- **Chemical Signaling**: Evolvable chemical system where species secrete and sense 4 different chemicals that diffuse through the environment
-- **Dynamic Combat**: Success rates (10%-90%) determined by emergent chemical field strength, not hardcoded values
-- **Reinforcement Learning**: Neural networks are fine-tuned within each generation based on survival rewards
-- **Geographic Speciation**: Species split into two when geographically separated populations are detected (checked every 100 generations)
-- **Dynamic Speciation**: When one species dominates (>75%), it automatically splits into a new species to maintain ecosystem diversity
-- **GPU Acceleration**: All computations run on CUDA/MPS/CPU via PyTorch for real-time simulation
-- **Network Persistence**: Best-performing neural networks are saved and loaded across sessions
+### Core Evolution
+- **Genome-Based Identity**: 12-dimensional genome (8 neural + 4 chemical) determines identity, no fixed species
+- **Neuroevolution**: Each organism has its own neural network that evolves through reproduction and mutation
+- **Sexual Reproduction**: Genetic crossover - offspring inherit 50% neurons from each parent
+- **Emergent Speciation**: Similar genomes cluster into natural groups, visible through color similarity
+
+### Chemical Ecology
+- **Chemical Signaling**: 4-chemical system where cells secrete based on their genome
+- **Genome-Based Affinity**: Chemical preferences encoded in genome (last 4 dimensions)
+- **Dynamic Combat**: Predation based on genome dissimilarity + chemical field strength
+
+### Technical
+- **GPU Acceleration**: All computations on CUDA/MPS/CPU via PyTorch for real-time performance
+- **Network Persistence**: Best networks saved and partially loaded (50% learned + 50% random for diversity)
+- **Reinforcement Learning**: Policy gradient fine-tuning within each lifetime
+- **Real-time Clustering**: Genome similarity analysis shows emergent species groups
 
 ## Demo
 
 ![Simulation Screenshot](docs/demo.png)
 
 The visualization shows:
-- **Top left**: Global population dynamics over all generations
-- **Bottom left**: Real-time grid view of organisms (colors = species, brightness = energy)
-- **Bottom middle**: Recent species population trends (last 100 generations)
-- **Right panel**: Species legend with colored squares, population counts, and percentages
+- **Main grid**: Organisms as colored circles (color = genome fingerprint, size = cell)
+- **Right panel**:
+  - Population and generation statistics
+  - FPS and performance metrics
+  - **Emergent Groups**: Number of genome clusters detected
+  - **Genome Clusters**: Top groups by population (G1, G2, etc.)
 
 ## Installation
 
@@ -40,121 +50,113 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Option 1: Matplotlib Renderer (Default)
-
 ```bash
-# Run simulation with matplotlib (slower, good for analysis)
+# Launch pygame renderer (main entry point)
 python main.py
 
-# Run with larger grid
-python main.py --grid 30
+# Controls:
+# SPACE  - Pause/Resume
+# R      - Reset simulation
+# S      - Save best network manually
+# C      - Toggle chemical overlay
+# G      - Toggle grid
+# +/-    - Adjust simulation speed
+# Wheel  - Zoom in/out
+# Drag   - Pan camera
+# ESC    - Quit
 
-# Validation mode: test trained network vs random networks
-python main.py --validate
 ```
 
-### Option 2: Web Interface (Recommended)
+## Project Structure
 
-```bash
-# Start web interface with real-time chemical visualization
-python web_interface.py
-
-# Open browser to http://localhost:8050
-# Features:
-# - Real-time population charts
-# - 4 chemical field heatmaps
-# - Species statistics table
-# - Pause/Resume/Reset controls
 ```
-
-### Option 3: Pygame Renderer (Fastest)
-
-```bash
-# High-performance renderer with 60+ FPS
-python pygame_renderer.py
-
-# Keyboard controls:
-# - SPACE: Pause/Resume
-# - R: Reset simulation
-# - S: Save best network manually
-# - C: Toggle chemical overlay
-# - G: Toggle grid
-# - +/-: Adjust speed (1x to 10x)
-# - Mouse wheel: Zoom
-# - Click+Drag: Pan camera
+evolution.py     # Core evolution engine (GPULifeGame class, genome logic)
+main.py          # Pygame renderer (entry point)
+best_brain.pt    # Saved neural network weights
 ```
-
-### Command Line Options (main.py only)
-
-| Option | Description |
-|--------|-------------|
-| `--grid`, `-g` | Grid size (default: 20) |
-| `--validate`, `-v` | Validation mode: S0 uses trained weights, S1/S2 use random |
 
 ## How It Works
 
-### Species & Predation
-- All species start with identical parameters
-- Differentiation emerges from neural network weights and evolvable chemical affinity
-- Every species can prey on every other species
-- **Dynamic combat success**: 10%-90% based on local chemical field strength (attacker vs defender)
-- Successful hunts grant 120% of prey's energy
+### Genome-Based Identity System
+- **No Fixed Species**: Organisms don't have species IDs - identity is determined by their 12-dimensional genome
+- **Genome Structure**:
+  - Neural fingerprint (8-dim): Statistical features from neural network weights
+  - Chemical affinity (4-dim): Preferences for secreting different chemicals
+- **Genome-to-Color Mapping**: Each cell's color is computed from its genome
+  - Similar genomes → similar colors
+  - Colors evolve naturally as genomes change
+  - Enables visual tracking of genetic lineages
 
-### Chemical Signaling System
-- **4 Chemical Types**: Each species has evolvable affinity for secreting different chemicals
-- **Diffusion**: Chemicals spread through the environment using GPU-accelerated convolution
-- **Decay**: Chemicals naturally degrade over time (5% per step)
-- **Emergent Behavior**: Chemical fields create "strength zones" that affect combat outcomes
-- **Neural Sensing**: Networks receive chemical concentrations as additional inputs
+### Mate Finding & Reproduction
+- **Sexual Reproduction**: Organisms find compatible mates based on genome similarity
+  - Genome distance < 0.5 threshold → compatible mates
+  - Offspring inherit 50% neurons from each parent (random crossover)
+  - Genome also crosses over and mutates
+- **Asexual Fallback**: If no compatible mate nearby, clone with mutation
+- **Initial Diversity**: 50% neurons loaded from saved weights + 50% random initialized
 
-### Genome-Based Visualization (Scheme C: Hybrid Genome)
-- **12-Dimensional Genome**: Each organism has a unique genome vector combining:
-  - Neural fingerprint (8-dim): Statistical features extracted from neural network weights (mean, std, abs_mean, max for each layer)
-  - Chemical affinity (4-dim): Evolvable preferences for secreting different chemicals
-- **Genome-to-Color Mapping**: Species colors are dynamically generated from their average genome
-  - Similar genomes produce similar colors in HSV space
-  - Color evolves continuously as neural networks and chemical preferences evolve
-  - Creates intuitive visual clustering of genetically related species
-- **Soft Transition**: Genome system coexists with discrete species IDs
-  - Species IDs still used for game mechanics (backwards compatible)
-  - Genome used only for visualization (can be toggled on/off)
-  - Updates every 50 generations to reflect evolutionary changes
+### Predation & Combat
+- **Genome-Based Hunting**: Can eat organisms with sufficiently different genomes
+  - Genome distance ≥ 0.5 → valid prey (opposite of mating criterion)
+  - Creates natural predator-prey relationships
+- **Dynamic Combat**: Success rate (10%-90%) based on chemical field strength
+- **Energy Gain**: Successful hunts grant 120% of prey's energy
 
-### Neural Network
+### Chemical Ecology
+- **Genome-Driven Secretion**: Each cell secretes chemicals based on its genome (last 4 dimensions)
+- **Diffusion & Decay**: Chemicals spread (30% diffusion) and decay (5% per step)
+- **Combat Modifier**: Chemical fields affect attack/defense strength
+- **Neural Input**: Cells sense local chemical concentrations
+
+### Emergent Speciation
+- **Genome Clustering**: Renderer analyzes genome similarities to identify natural groups
+- **Dynamic Groups**: Species emerge and disappear as genomes evolve
+- **Visual Feedback**: "Emergent Groups" stat shows current number of genome clusters
+
+### Neural Network Architecture
 - **Input (24 neurons)**:
   - 8 neighbor energy levels
-  - Same/different species counts
+  - Similar/different genome counts (based on genome distance)
   - Own energy and neighbor density
   - 4 local chemical concentrations
-  - 8 reserved slots for future features
-- **Hidden (variable neurons)**: Fully connected with tanh activation
+  - 8 reserved slots
+- **Hidden (8 neurons default)**: Fully connected with tanh activation
 - **Output (7 actions)**: Stay, Move (4 directions), Eat, Reproduce
 
-### Evolution Mechanisms
-1. **Sexual Reproduction with Genetic Crossover**:
-   - Organisms find mates (same-species neighbors)
-   - Offspring inherits 50% neurons from each parent (interleaved crossover)
-   - Falls back to asexual cloning if no mate available
-   - Mutation applied after inheritance (10% rate)
-2. **RL Fine-tuning**: Successful actions (hunting, escaping, reproducing) reinforce neural network weights
-3. **Dominance Speciation**: Dominant species (>75% population) split to prevent competitive exclusion
-4. **Geographic Speciation**: Species split when separated into distinct spatial clusters (checked every 100 generations)
+### Evolution & Learning
+1. **Sexual Reproduction with Genome Crossover**:
+   - Find mates with similar genomes (distance < 0.5 threshold)
+   - Offspring inherit: 50% neurons + 50% genome from each parent
+   - Random crossover masks for genetic diversity
+   - Falls back to asexual cloning if no compatible mate nearby
+   - Mutation applied to both network and genome (10% rate)
 
-### Fitness & Persistence
+2. **Reinforcement Learning**: Policy gradient fine-tuning
+   - Rewards: eating (+2.0), escaping (+1.0), reproducing (+1.5)
+   - Updates neural weights within lifetime based on successful actions
+
+3. **Natural Selection**:
+   - No artificial speciation mechanisms
+   - Groups emerge naturally from genome similarity
+   - Compatible mates cluster into breeding populations
+
+### Network Persistence
 - Fitness = lifetime + reproduction_count × 10
-- Best network saved every 50 generations to `best_brain.pt`
-- **Asynchronous saving**: Uses background thread to avoid stuttering during save operations
-- 20% of initial cells inherit saved weights on startup
+- Best network auto-saved to `best_brain.pt` (press 'S' for manual save)
+- **Initial diversity strategy**:
+  - 20% of initial cells load saved weights
+  - Only 50% of hidden neurons copied (rest stay random)
+  - Ensures diversity while preserving learned behaviors
+- **Asynchronous saving**: Background thread prevents stuttering
 
 ## Configuration
 
-Key parameters in `main.py`:
+Key parameters in `evolution.py`:
 
 ```python
 # Simulation
-GRID_SIZE = 20
-INITIAL_NUM_SPECIES = 3
-MAX_SPECIES = 10
+GRID_SIZE = 100
+MATE_GENOME_THRESHOLD = 0.5  # Max distance for compatible mates
 
 # Chemical Signaling
 NUM_CHEMICALS = 4
