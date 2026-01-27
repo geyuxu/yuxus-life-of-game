@@ -27,10 +27,11 @@ import sys
 import os
 import time
 from collections import deque
+from scipy.ndimage import label
 
 # Import simulation
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from main import GPULifeGame, NUM_CHEMICALS, genome_to_color
+from main import GPULifeGame, NUM_CHEMICALS, genome_to_color, MATE_GENOME_THRESHOLD
 
 # =============================================================================
 # CONSTANTS
@@ -78,6 +79,11 @@ class PyGameRenderer:
         # Stats
         self.fps_history = deque(maxlen=30)
         self.step_time_history = deque(maxlen=30)
+
+        # Genome clustering cache (expensive operation)
+        self.cached_clusters = []
+        self.cluster_update_interval = 30  # Update clusters every N frames
+        self.frames_since_cluster_update = 0
 
         # Panels
         self.main_panel_width = WINDOW_WIDTH - 300
@@ -246,6 +252,77 @@ class PyGameRenderer:
             sx_right, _ = self.world_to_screen(self.game.size, i)
             pygame.draw.line(self.main_surface, grid_color, (sx_left, sy), (sx_right, sy), 1)
 
+    def cluster_genomes(self, max_cells=500):
+        """Cluster alive cells by genome similarity to find emergent species.
+
+        Uses sampling for performance when population is large.
+        """
+        alive = self.game.alive.cpu().numpy()
+        genome = self.game.genome.cpu().numpy()
+
+        if not alive.any():
+            return []
+
+        # Get all alive cell genomes
+        alive_genomes = genome[alive]  # [N, 12]
+        N = len(alive_genomes)
+
+        if N == 0:
+            return []
+
+        # Sample if too many cells (for performance)
+        if N > max_cells:
+            sample_indices = np.random.choice(N, max_cells, replace=False)
+            alive_genomes = alive_genomes[sample_indices]
+            N = max_cells
+
+        # Build adjacency matrix: cells are connected if genome distance < threshold
+        adjacency = np.zeros((N, N), dtype=bool)
+        for i in range(N):
+            for j in range(i+1, N):
+                dist = np.linalg.norm(alive_genomes[i] - alive_genomes[j])
+                if dist < MATE_GENOME_THRESHOLD:
+                    adjacency[i, j] = True
+                    adjacency[j, i] = True
+
+        # Find connected components (clusters) using BFS
+        clusters = []
+        visited = np.zeros(N, dtype=bool)
+
+        for i in range(N):
+            if visited[i]:
+                continue
+
+            # BFS to find all cells in this cluster
+            cluster_indices = []
+            queue = [i]
+            visited[i] = True
+
+            while queue:
+                current = queue.pop(0)
+                cluster_indices.append(current)
+
+                # Add unvisited neighbors
+                neighbors = np.where(adjacency[current] & ~visited)[0]
+                for neighbor in neighbors:
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+
+            # Calculate cluster statistics
+            cluster_genomes = alive_genomes[cluster_indices]
+            avg_genome = cluster_genomes.mean(axis=0)
+            color = genome_to_color(avg_genome)
+
+            clusters.append({
+                'size': len(cluster_indices),
+                'color': color,
+                'avg_genome': avg_genome
+            })
+
+        # Sort by size (largest first)
+        clusters.sort(key=lambda x: x['size'], reverse=True)
+        return clusters
+
     def render_stats_panel(self):
         """Render statistics panel on the right."""
         self.stats_surface.fill(COLOR_PANEL)
@@ -257,12 +334,22 @@ class PyGameRenderer:
         self.stats_surface.blit(title, (10, y_offset))
         y_offset += 50
 
-        # Basic stats (genome-based system, no species tracking)
+        # Basic stats
         total_pop = self.game.history['population'][-1] if self.game.history['population'] else 0
+
+        # Update genome clusters periodically (expensive operation)
+        self.frames_since_cluster_update += 1
+        if self.frames_since_cluster_update >= self.cluster_update_interval:
+            self.cached_clusters = self.cluster_genomes()
+            self.frames_since_cluster_update = 0
+
+        clusters = self.cached_clusters
+        num_clusters = len(clusters)
 
         stats_lines = [
             f"Generation: {self.game.generation:,}",
             f"Population: {total_pop:,}",
+            f"Emergent Groups: {num_clusters}",
             f"",
             f"FPS: {int(np.mean(self.fps_history)) if self.fps_history else 0}",
             f"Step: {int(np.mean(self.step_time_history)) if self.step_time_history else 0}ms",
@@ -271,15 +358,38 @@ class PyGameRenderer:
             f"Zoom: {self.camera_zoom:.2f}x",
             f"Chemical: {'ON' if self.show_chemical else 'OFF'}",
             f"Grid: {'ON' if self.show_grid else 'OFF'}",
-            f"",
-            f"Genome-Based Evolution",
-            f"Colors reflect genome similarity",
         ]
 
         for line in stats_lines:
             text = self.font_small.render(line, True, COLOR_TEXT)
             self.stats_surface.blit(text, (10, y_offset))
             y_offset += 22
+
+        # Show emergent species groups
+        y_offset += 10
+        title = self.font_medium.render('Genome Clusters', True, COLOR_TEXT)
+        self.stats_surface.blit(title, (10, y_offset))
+        y_offset += 30
+
+        for i, cluster in enumerate(clusters[:15]):  # Show top 15
+            if y_offset > WINDOW_HEIGHT - 30:
+                break
+
+            size = cluster['size']
+            pct = (size / total_pop * 100) if total_pop > 0 else 0
+            color_tuple = cluster['color']
+            color = tuple(int(c * 255) for c in color_tuple)
+
+            # Color square
+            rect = pygame.Rect(10, y_offset, 15, 15)
+            pygame.draw.rect(self.stats_surface, color, rect)
+            pygame.draw.rect(self.stats_surface, COLOR_TEXT, rect, 1)
+
+            # Cluster info
+            text = self.font_small.render(f"G{i+1:2d}  {size:5d}  {pct:4.1f}%",
+                                         True, COLOR_TEXT)
+            self.stats_surface.blit(text, (30, y_offset))
+            y_offset += 20
 
         # Copy to main window
         self.window.blit(self.stats_surface, (self.stats_panel_x, 0))
