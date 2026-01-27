@@ -68,6 +68,9 @@ MIN_HIDDEN_SIZE = 4         # Minimum hidden layer size
 MUTATION_INTERVAL = 10      # Check for random mutation every N generations
 RANDOM_MUTATION_CHANCE = 0.1  # Probability per species per check
 
+# Species recycling
+EXTINCT_RECYCLE_DELAY = 50  # Generations before extinct species slot can be reused
+
 # Performance tuning
 HISTORY_WINDOW = 1000       # Keep only last N generations in history (0 = unlimited)
 RENDER_INTERVAL = 1         # Render every N frames (increase for faster simulation)
@@ -133,43 +136,96 @@ def create_species_config(sp_id: int, num_total: int, name: str = None) -> dict:
         'hidden_size': SPECIES_HIDDEN_SIZE,
         'parent': None,
         'extinct': False,
+        'extinct_gen': None,  # Generation when species went extinct (for recycling)
     }
 
 
-def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREMENT) -> int:
+def find_recyclable_species(current_gen: int) -> int:
+    """
+    Find a species slot that can be recycled (extinct for EXTINCT_RECYCLE_DELAY generations).
+
+    Returns:
+        The ID of a recyclable species, or None if none available
+    """
+    for sp_id, sp in enumerate(SPECIES_CONFIG):
+        if sp['extinct'] and sp['extinct_gen'] is not None:
+            if current_gen - sp['extinct_gen'] >= EXTINCT_RECYCLE_DELAY:
+                return sp_id
+    return None
+
+
+def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREMENT, current_gen: int = 0) -> int:
     """
     Create a new child species from a parent species.
 
     Args:
         parent_id: The ID of the parent species
         hidden_delta: Change in hidden layer size (can be positive or negative)
+        current_gen: Current generation (for species recycling)
 
     Returns:
         The ID of the new species, or None if max species reached
     """
-    new_id = len(SPECIES_CONFIG)
-    if new_id >= MAX_SPECIES:
-        return None
+    # First, try to recycle an extinct species slot
+    recycled_id = find_recyclable_species(current_gen)
 
-    # Generate lineage-based name: S{parent}_{child_num}
-    parent_name = SPECIES_CONFIG[parent_id]['name']
-    child_num = SPECIES_CHILD_COUNT.get(parent_id, 0) + 1
-    SPECIES_CHILD_COUNT[parent_id] = child_num
-    new_name = f"{parent_name}_{child_num}"
+    if recycled_id is not None:
+        # Recycle the extinct species slot
+        new_id = recycled_id
+        old_name = SPECIES_CONFIG[new_id]['name']
 
-    new_config = create_species_config(new_id, new_id + 1, name=new_name)
-    new_config['parent'] = parent_id
+        # Generate lineage-based name
+        parent_name = SPECIES_CONFIG[parent_id]['name']
+        child_num = SPECIES_CHILD_COUNT.get(parent_id, 0) + 1
+        SPECIES_CHILD_COUNT[parent_id] = child_num
+        new_name = f"{parent_name}_{child_num}"
 
-    # Apply hidden layer delta (can gain or lose neurons)
-    parent_hidden = SPECIES_CONFIG[parent_id]['hidden_size']
-    new_hidden = max(MIN_HIDDEN_SIZE, min(parent_hidden + hidden_delta, MAX_HIDDEN_SIZE))
-    new_config['hidden_size'] = new_hidden
+        # Reset the species config
+        parent_hidden = SPECIES_CONFIG[parent_id]['hidden_size']
+        new_hidden = max(MIN_HIDDEN_SIZE, min(parent_hidden + hidden_delta, MAX_HIDDEN_SIZE))
 
-    SPECIES_CONFIG.append(new_config)
+        SPECIES_CONFIG[new_id] = {
+            'name': new_name,
+            'color': generate_random_color(new_id, MAX_SPECIES),
+            'prey': [j for j in range(len(SPECIES_CONFIG)) if j != new_id],
+            'metabolism': SPECIES_METABOLISM,
+            'repro_threshold': SPECIES_REPRO_THRESHOLD,
+            'repro_cost': SPECIES_REPRO_COST,
+            'offspring_energy': SPECIES_OFFSPRING_ENERGY,
+            'starvation': SPECIES_STARVATION,
+            'hidden_size': new_hidden,
+            'parent': parent_id,
+            'extinct': False,
+            'extinct_gen': None,
+        }
 
-    # Update all existing species' prey lists
-    for sp_id in range(new_id):
-        SPECIES_CONFIG[sp_id]['prey'].append(new_id)
+        print(f"             [Recycled slot {new_id} from extinct {old_name}]")
+
+    else:
+        # Create new species slot
+        new_id = len(SPECIES_CONFIG)
+        if new_id >= MAX_SPECIES:
+            return None
+
+        # Generate lineage-based name: S{parent}_{child_num}
+        parent_name = SPECIES_CONFIG[parent_id]['name']
+        child_num = SPECIES_CHILD_COUNT.get(parent_id, 0) + 1
+        SPECIES_CHILD_COUNT[parent_id] = child_num
+        new_name = f"{parent_name}_{child_num}"
+
+        new_config = create_species_config(new_id, new_id + 1, name=new_name)
+        new_config['parent'] = parent_id
+
+        # Apply hidden layer delta (can gain or lose neurons)
+        parent_hidden = SPECIES_CONFIG[parent_id]['hidden_size']
+        new_hidden = max(MIN_HIDDEN_SIZE, min(parent_hidden + hidden_delta, MAX_HIDDEN_SIZE))
+        new_config['hidden_size'] = new_hidden
+
+        SPECIES_CONFIG.append(new_config)
+
+        # Update all existing species' prey lists
+        for sp_id in range(new_id):
+            SPECIES_CONFIG[sp_id]['prey'].append(new_id)
 
     # Rebuild GPU tensors
     global SPECIES_TENSORS
@@ -178,9 +234,9 @@ def create_child_species(parent_id: int, hidden_delta: int = HIDDEN_SIZE_INCREME
     return new_id
 
 
-def add_new_species(parent_id: int) -> int:
+def add_new_species(parent_id: int, current_gen: int = 0) -> int:
     """Create a new species by splitting (always gains neurons). Kept for backward compatibility."""
-    return create_child_species(parent_id, hidden_delta=HIDDEN_SIZE_INCREMENT)
+    return create_child_species(parent_id, hidden_delta=HIDDEN_SIZE_INCREMENT, current_gen=current_gen)
 
 
 # Initialize species
@@ -758,7 +814,7 @@ class GPULifeGame:
             else:
                 hidden_delta = -HIDDEN_SIZE_INCREMENT  # 40% chance to lose
 
-            new_species_id = create_child_species(sp_id, hidden_delta=hidden_delta)
+            new_species_id = create_child_species(sp_id, hidden_delta=hidden_delta, current_gen=self.generation)
             if new_species_id is None:
                 continue  # Max species reached
 
@@ -771,10 +827,15 @@ class GPULifeGame:
             print(f"\n[MUTATION] Random mutation in {parent_name}")
             print(f"           New species: {new_name}")
             print(f"           Hidden neurons: {parent_hidden} -> {new_hidden} ({delta_str})")
-            print(f"           Total species: {len(SPECIES_CONFIG)}")
+            print(f"           Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
 
-            # Add history tracking for new species
-            self.history['species'].append([0] * len(self.history['population']))
+            # Handle history tracking for new/recycled species
+            if new_species_id < len(self.history['species']):
+                # Recycled slot: reset history to zeros
+                self.history['species'][new_species_id] = [0] * len(self.history['population'])
+            else:
+                # New slot: append new history
+                self.history['species'].append([0] * len(self.history['population']))
 
             # Convert some members of parent species to new species
             parent_mask = (self.species == sp_id) & self.alive
@@ -816,14 +877,15 @@ class GPULifeGame:
         if dominance_ratio < DOMINANCE_THRESHOLD:
             return False
 
-        # Mark extinct species
+        # Mark extinct species with extinction generation
         for sp_id, count in enumerate(species_counts):
             if count == 0 and not SPECIES_CONFIG[sp_id]['extinct']:
                 SPECIES_CONFIG[sp_id]['extinct'] = True
+                SPECIES_CONFIG[sp_id]['extinct_gen'] = self.generation
 
-        new_species_id = add_new_species(dominant_species)
+        new_species_id = add_new_species(dominant_species, current_gen=self.generation)
         if new_species_id is None:
-            print(f"\nMax species limit ({MAX_SPECIES}) reached, cannot split")
+            print(f"\nMax species limit ({MAX_SPECIES}) reached and no recyclable slots")
             return False
 
         parent_name = SPECIES_CONFIG[dominant_species]['name']
@@ -833,9 +895,15 @@ class GPULifeGame:
         print(f"\n[SPECIATION] {parent_name} at {dominance_ratio*100:.1f}% > {DOMINANCE_THRESHOLD*100}%")
         print(f"             {parent_name} splits into {new_name}")
         print(f"             Hidden neurons: {parent_hidden} -> {new_hidden}")
-        print(f"             Total species: {len(SPECIES_CONFIG)}")
+        print(f"             Active species: {sum(1 for sp in SPECIES_CONFIG if not sp['extinct'])}/{len(SPECIES_CONFIG)}")
 
-        self.history['species'].append([0] * len(self.history['population']))
+        # Handle history tracking for new/recycled species
+        if new_species_id < len(self.history['species']):
+            # Recycled slot: reset history to zeros
+            self.history['species'][new_species_id] = [0] * len(self.history['population'])
+        else:
+            # New slot: append new history
+            self.history['species'].append([0] * len(self.history['population']))
 
         dominant_mask = (self.species == dominant_species) & self.alive
         dominant_positions = dominant_mask.nonzero(as_tuple=False)
@@ -929,7 +997,8 @@ def print_system_info():
     print(f"\n[Dynamic Speciation]")
     print(f"  Splits when single species exceeds {DOMINANCE_THRESHOLD*100:.0f}%")
     print(f"  Split mutation rate: {SPLIT_MUTATION_RATE}")
-    print(f"  Initial species: {INITIAL_NUM_SPECIES}, Max species: {MAX_SPECIES}")
+    print(f"  Initial species: {INITIAL_NUM_SPECIES}, Max slots: {MAX_SPECIES}")
+    print(f"  Species recycling: extinct slots reused after {EXTINCT_RECYCLE_DELAY} generations")
     print(f"  Hidden neurons: {SPECIES_HIDDEN_SIZE} -> +/-{HIDDEN_SIZE_INCREMENT}/mutation (range {MIN_HIDDEN_SIZE}-{MAX_HIDDEN_SIZE})")
     print(f"\n[Random Mutation]")
     print(f"  Check every {MUTATION_INTERVAL} generations")
