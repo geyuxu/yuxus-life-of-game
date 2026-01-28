@@ -137,7 +137,7 @@ ELITE_RATIO = 0.01             # 10% trained, 90% random (strict validation)
 
 # Genome-based coloring
 GENOME_BASED_COLOR = True      # Color cells by genome similarity
-GENOME_COLOR_UPDATE_INTERVAL = 200  # Update colors every N generations
+GENOME_COLOR_UPDATE_INTERVAL = 10  # Update colors every N generations (smaller = smoother color transitions)
 
 # Performance
 HISTORY_WINDOW = 1000          # Keep last N generations (0 = unlimited)
