@@ -141,6 +141,7 @@ GENOME_COLOR_UPDATE_INTERVAL = 200  # Update colors every N generations
 
 # Performance
 HISTORY_WINDOW = 1000          # Keep last N generations (0 = unlimited)
+HISTORY_UPDATE_INTERVAL = 10   # Update history stats every N generations (higher = faster)
 RENDER_INTERVAL = 1            # Render every N frames
 CHART_UPDATE_INTERVAL = 5      # Update charts every N frames
 
