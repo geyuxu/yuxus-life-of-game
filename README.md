@@ -13,7 +13,7 @@
 
 ![Simulation Demo](docs/demo.gif)
 
-**[Watch Full Demo on YouTube](https://youtu.be/CeMnTrSrS8k)** | **[Read the Paper](#citation)**
+**[Watch Full Demo on YouTube](https://youtu.be/CeMnTrSrS8k)** | **[Read the Blog Post](https://yuxu.ge/blog/post.html?p=posts/2026/neuroevo-life)** | **[Read the Paper](#citation)**
 
 </div>
 
