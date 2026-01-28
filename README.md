@@ -52,23 +52,15 @@ A GPU-accelerated genome-based evolution simulation where neural network organis
 
 ### Video Demo
 
-> **Note**: Full demo video (demo.webm, 72MB) is available in the repository at `docs/demo.webm`.
-> For streaming, you can:
-> - **Download locally**: `git clone` and open `docs/demo.webm`
-> - **GitHub Release**: Check [Releases](../../releases) for optimized versions
-> - **YouTube**: [Upload pending - link will be added]
+<div align="center">
+  <a href="https://youtu.be/CeMnTrSrS8k">
+    <img src="https://img.youtube.com/vi/CeMnTrSrS8k/maxresdefault.jpg" alt="Yuxu's Game of Life - Demo Video" width="800">
+  </a>
+  <p><em>🎥 <a href="https://youtu.be/CeMnTrSrS8k"><strong>Watch on YouTube</strong></a> - Full walkthrough of evolution, reproduction, and emergent behaviors</em></p>
+</div>
 
-To create an optimized version for web sharing, see [`docs/optimize_video.sh`](docs/optimize_video.sh).
-
-![Simulation Screenshot](docs/screenshot.png)
-
-**Visualization Elements**:
-- **Main Grid**: Organisms as colored cells (color from genome fingerprint, brightness from energy)
-- **Right Panel**:
-  - Generation and population statistics
-  - FPS and performance metrics
-  - **Lineage Tracking**: Trained vs Random lineage comparison
-  - **Genome Clusters**: Top groups by population with percentages
+> **Local Video**: Full quality demo (demo.webm, 72MB) is available at `docs/demo.webm` in the repository.
+> To optimize for web sharing, see [`docs/optimize_video.sh`](docs/optimize_video.sh).
 
 ## Installation
 
