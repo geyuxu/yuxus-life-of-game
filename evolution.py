@@ -680,9 +680,9 @@ class GPULifeGame:
         if not self.alive.any():
             return
 
-        # Calculate multi-objective fitness with diversity bonus
-        # This is only called occasionally (when saving), so the O(N²) cost is acceptable
-        fitness = self._calculate_fitness(include_diversity=True)
+        # Calculate fitness WITHOUT diversity for speed (diversity is too expensive for every step)
+        # We only include diversity when actually saving the network
+        fitness = self._calculate_fitness(include_diversity=False)
 
         max_fitness = fitness.max().item()
         if max_fitness > self.best_fitness:
