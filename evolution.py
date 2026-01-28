@@ -212,21 +212,36 @@ def genome_to_color(genome: np.ndarray) -> tuple:
 
 def genetic_distance(genome1: np.ndarray, genome2: np.ndarray) -> float:
     """
-    Calculate genetic distance between two genomes using Euclidean distance.
+    Calculate genetic distance between two genomes using cosine distance.
+
+    Uses cosine distance (1 - cosine_similarity) which is more stable
+    in high-dimensional spaces than Euclidean distance.
 
     Args:
         genome1: First genome (12-dim)
         genome2: Second genome (12-dim)
 
     Returns:
-        Euclidean distance between genomes
+        Cosine distance between genomes (0 = identical, 2 = opposite)
     """
-    return np.linalg.norm(genome1 - genome2)
+    # Use chemical affinity (last 4 dims) for distance calculation
+    chem1 = genome1[8:12] if len(genome1) == 12 else genome1
+    chem2 = genome2[8:12] if len(genome2) == 12 else genome2
+
+    # Normalize vectors
+    norm1 = np.linalg.norm(chem1)
+    norm2 = np.linalg.norm(chem2)
+    if norm1 < 1e-8 or norm2 < 1e-8:
+        return 1.0  # Return max distance if either vector is zero
+
+    # Cosine similarity then convert to distance
+    cosine_sim = np.dot(chem1, chem2) / (norm1 * norm2)
+    return 1.0 - cosine_sim  # Distance: 0 = identical, 2 = opposite
 
 
 def genetic_similarity(genome1: np.ndarray, genome2: np.ndarray) -> float:
     """
-    Calculate genetic similarity as normalized inverse distance.
+    Calculate genetic similarity using cosine similarity.
 
     Returns value in range [0, 1] where 1 = identical genomes.
 
@@ -237,10 +252,19 @@ def genetic_similarity(genome1: np.ndarray, genome2: np.ndarray) -> float:
     Returns:
         Similarity score (0-1)
     """
-    distance = genetic_distance(genome1, genome2)
-    # Use exponential decay for smooth similarity curve
-    # sigma=2.0 means similarity drops to ~0.6 at distance=1.0
-    return np.exp(-distance**2 / (2 * 2.0**2))
+    # Use chemical affinity (last 4 dims) for similarity calculation
+    chem1 = genome1[8:12] if len(genome1) == 12 else genome1
+    chem2 = genome2[8:12] if len(genome2) == 12 else genome2
+
+    # Normalize vectors
+    norm1 = np.linalg.norm(chem1)
+    norm2 = np.linalg.norm(chem2)
+    if norm1 < 1e-8 or norm2 < 1e-8:
+        return 0.0  # Return zero similarity if either vector is zero
+
+    # Cosine similarity: range [-1, 1], scale to [0, 1]
+    cosine_sim = np.dot(chem1, chem2) / (norm1 * norm2)
+    return (cosine_sim + 1.0) / 2.0  # Scale to [0, 1]
 
 
 # =============================================================================
@@ -409,6 +433,15 @@ class GPULifeGame:
             )
         else:
             self.replay_buffer = None
+
+        # Advantage baseline for stable policy gradient (Optimization A)
+        self.reward_baseline = 0.0
+
+        # Pre-allocated buffers for _build_inputs() to reduce memory allocation (Optimization C)
+        self._input_buffer = torch.zeros((size, size, INPUT_SIZE), dtype=torch.float32, device=DEVICE)
+        self._neighbor_energy_buffer = torch.zeros((size, size, 8), dtype=torch.float32, device=DEVICE)
+        self._neighbor_alive_buffer = torch.zeros((size, size, 8), dtype=torch.float32, device=DEVICE)
+        self._similar_count_buffer = torch.zeros((size, size, 1), dtype=torch.float32, device=DEVICE)
 
         # Load saved weights if available
         self.saved_w1, self.saved_w2, self.saved_hidden_size = self._load_saved_weights()
@@ -650,15 +683,20 @@ class GPULifeGame:
                     sample_indices = torch.randperm(n_alive, device=DEVICE)[:n_sample]
                     alive_positions = alive_positions[sample_indices]
 
-                # For each sampled cell, calculate average distance to other alive cells
+                # For each sampled cell, calculate average cosine distance to other alive cells
+                # Normalize all genomes for cosine similarity calculation
+                alive_genomes_norm = F.normalize(alive_genomes[:, 8:12], dim=-1, eps=1e-8)  # Use chemical affinity
+
                 for idx, pos in enumerate(alive_positions):
                     r, c = pos[0].item(), pos[1].item()
-                    cell_genome = self.genome[r, c]  # [12]
+                    cell_genome = self.genome[r, c, 8:12]  # [4] - chemical affinity
+                    cell_genome_norm = F.normalize(cell_genome.unsqueeze(0), dim=-1, eps=1e-8)  # [1, 4]
 
-                    # Calculate distances to all other alive cells
-                    distances = torch.norm(alive_genomes - cell_genome.unsqueeze(0), dim=1)
-                    # Exclude self (distance=0)
-                    other_distances = distances[distances > 0]
+                    # Calculate cosine similarity to all other alive cells
+                    cosine_sims = (alive_genomes_norm * cell_genome_norm).sum(dim=-1)  # [N]
+                    # Convert to distance: 1 - similarity, exclude self (sim=1 -> dist=0)
+                    distances = 1.0 - cosine_sims
+                    other_distances = distances[distances > 0.01]  # Exclude near-identical (self)
 
                     if len(other_distances) > 0:
                         # Average distance to others = diversity score
@@ -823,43 +861,56 @@ class GPULifeGame:
         return torch.roll(torch.roll(tensor, -dr, 0), -dc, 1)
 
     def _build_inputs(self):
-        """Build neural network input features from environment state."""
+        """Build neural network input features from environment state.
+
+        Optimizations:
+        - Uses pre-allocated buffers to avoid frequent memory allocation
+        - Uses cosine similarity instead of Euclidean distance for genome comparison
+        """
         alive_f = self.alive.float()
         energy_norm = self.energy / MAX_ENERGY
 
         dirs = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-        neighbor_energy = torch.stack([self._get_shifted(energy_norm * alive_f, dr, dc) for dr, dc in dirs], dim=-1)
-        neighbor_alive = torch.stack([self._get_shifted(alive_f, dr, dc) for dr, dc in dirs], dim=-1)
 
-        # Compute genome-based similarity: use chemical affinity (last 4 dims of genome)
-        # for efficient similarity calculation
+        # Use pre-allocated buffers with slice assignment instead of torch.stack
+        for i, (dr, dc) in enumerate(dirs):
+            self._neighbor_energy_buffer[:, :, i] = self._get_shifted(energy_norm * alive_f, dr, dc)
+            self._neighbor_alive_buffer[:, :, i] = self._get_shifted(alive_f, dr, dc)
+
+        # Compute genome-based similarity using cosine similarity (Optimization B)
+        # Use chemical affinity (last 4 dims of genome) for efficient similarity calculation
         chem_affinity = self.genome[:, :, 8:12]  # [H, W, 4]
-        similar_count = torch.zeros((self.size, self.size, 1), device=DEVICE)
+        # Normalize for cosine similarity
+        chem_norm = F.normalize(chem_affinity, dim=-1, eps=1e-8)  # [H, W, 4]
+
+        self._similar_count_buffer.fill_(0)
 
         for dr, dc in dirs:
             neighbor_chem = self._get_shifted(chem_affinity, dr, dc)  # [H, W, 4]
+            neighbor_chem_norm = F.normalize(neighbor_chem, dim=-1, eps=1e-8)  # [H, W, 4]
             neighbor_is_alive = self._get_shifted(alive_f, dr, dc)  # [H, W]
-            # Compute distance in chemical affinity space
-            distance = torch.norm(chem_affinity - neighbor_chem, dim=-1)  # [H, W]
-            is_similar = (distance < MATE_GENOME_THRESHOLD).float() * neighbor_is_alive
-            similar_count[:, :, 0] += is_similar
+            # Cosine similarity: dot product of normalized vectors
+            cosine_sim = (chem_norm * neighbor_chem_norm).sum(dim=-1)  # [H, W]
+            # Similar if cosine similarity > 0.8 (equivalent to angle < ~37 degrees)
+            is_similar = (cosine_sim > 0.8).float() * neighbor_is_alive
+            self._similar_count_buffer[:, :, 0] += is_similar
 
-        total_neighbors = neighbor_alive.sum(dim=-1, keepdim=True)
-        diff_count = total_neighbors - similar_count
+        total_neighbors = self._neighbor_alive_buffer.sum(dim=-1, keepdim=True)
+        diff_count = total_neighbors - self._similar_count_buffer
 
         # Local chemical concentrations (transpose for correct indexing)
         local_chemicals = self.chemicals[:, :, :].permute(1, 2, 0)  # [H, W, NUM_CHEMICALS]
 
-        inputs = torch.cat([
-            neighbor_energy,                                    # 8: neighbor energy levels
-            similar_count / 8.0,                                # 1: similar genome count (was same species)
-            diff_count / 8.0,                                   # 1: different genome count
-            energy_norm.unsqueeze(-1),                          # 1: own energy
-            total_neighbors / 8.0,                              # 1: total neighbor count
-            torch.zeros((self.size, self.size, 8), device=DEVICE),  # 8: padding
-            local_chemicals * CHEMICAL_INPUT_WEIGHT,            # NUM_CHEMICALS: local chemical signals
-        ], dim=-1)
-        return inputs
+        # Use pre-allocated input buffer with slice assignment instead of torch.cat
+        self._input_buffer[:, :, 0:8] = self._neighbor_energy_buffer
+        self._input_buffer[:, :, 8:9] = self._similar_count_buffer / 8.0
+        self._input_buffer[:, :, 9:10] = diff_count / 8.0
+        self._input_buffer[:, :, 10:11] = energy_norm.unsqueeze(-1)
+        self._input_buffer[:, :, 11:12] = total_neighbors / 8.0
+        self._input_buffer[:, :, 12:20] = 0  # padding
+        self._input_buffer[:, :, 20:20+NUM_CHEMICALS] = local_chemicals * CHEMICAL_INPUT_WEIGHT
+
+        return self._input_buffer
 
     def _batch_forward(self, inputs):
         """Batch forward pass through all cells' neural networks (CUDA optimized)."""
@@ -1154,17 +1205,21 @@ class GPULifeGame:
 
         # Get chemical affinity for genome-based prey detection
         my_chem = self.genome[:, :, 8:12]  # [H, W, 4]
+        # Normalize for cosine similarity (Optimization B)
+        my_chem_norm = F.normalize(my_chem, dim=-1, eps=1e-8)  # [H, W, 4]
 
         for dr, dc in all_dirs:
             neighbor_r = (self.rows + dr) % self.size
             neighbor_c = (self.cols + dc) % self.size
             neighbor_alive = self.alive[neighbor_r, neighbor_c]
             neighbor_chem = my_chem[neighbor_r, neighbor_c]  # [H, W, 4]
+            neighbor_chem_norm = F.normalize(neighbor_chem, dim=-1, eps=1e-8)  # [H, W, 4]
             neighbor_energy = self.energy[neighbor_r, neighbor_c]
 
             # Can eat if genome is sufficiently different (not same "kind")
-            genome_dist = torch.norm(my_chem - neighbor_chem, dim=-1)  # [H, W]
-            is_valid_prey = (genome_dist >= MATE_GENOME_THRESHOLD)  # Opposite of mating criterion
+            # Using cosine similarity: low similarity = valid prey
+            cosine_sim = (my_chem_norm * neighbor_chem_norm).sum(dim=-1)  # [H, W]
+            is_valid_prey = (cosine_sim <= 0.8)  # Opposite of mating criterion
             can_attack = predator_eat & neighbor_alive & is_valid_prey
 
             # Dynamic combat success based on chemical "strength"
@@ -1238,9 +1293,11 @@ class GPULifeGame:
                 # Get genome of the target's neighbors
                 neighbor_genome = self.genome[check_r, check_c]  # [H, W, 12]
 
-                # Calculate genome distance between neighbor and parent
-                genome_dist = torch.norm(neighbor_genome - parent_genomes, dim=-1)  # [H, W]
-                is_similar = (genome_dist < MATE_GENOME_THRESHOLD).float()
+                # Calculate genome similarity using cosine similarity (Optimization B)
+                neighbor_chem = F.normalize(neighbor_genome[:, :, 8:12], dim=-1, eps=1e-8)  # [H, W, 4]
+                parent_chem = F.normalize(parent_genomes[:, :, 8:12], dim=-1, eps=1e-8)  # [H, W, 4]
+                cosine_sim = (neighbor_chem * parent_chem).sum(dim=-1)  # [H, W]
+                is_similar = (cosine_sim > 0.8).float()
 
                 # Add to enclosure count where neighbor is alive and similar
                 target_enclosure += neighbor_alive.float() * is_similar
@@ -1289,9 +1346,12 @@ class GPULifeGame:
                 is_alive = self.alive[candidate_r, candidate_c]
                 candidate_genome = self.genome[candidate_r, candidate_c]  # [N, 12]
 
-                # Genome compatibility: distance < threshold (similar genomes can mate)
-                genome_dist = torch.norm(parent1_genome - candidate_genome, dim=-1)  # [N]
-                is_compatible = (genome_dist < MATE_GENOME_THRESHOLD)
+                # Genome compatibility using cosine similarity (Optimization B)
+                # Use chemical affinity (last 4 dims) for compatibility check
+                parent1_chem = F.normalize(parent1_genome[:, 8:12], dim=-1, eps=1e-8)  # [N, 4]
+                candidate_chem = F.normalize(candidate_genome[:, 8:12], dim=-1, eps=1e-8)  # [N, 4]
+                cosine_sim = (parent1_chem * candidate_chem).sum(dim=-1)  # [N]
+                is_compatible = (cosine_sim > 0.8)  # Similar genomes can mate
                 is_valid_mate = is_alive & is_compatible & ~mate_found
 
                 mate_r = torch.where(is_valid_mate, candidate_r, mate_r)
@@ -1426,17 +1486,24 @@ class GPULifeGame:
             else:
                 positions = reward_mask.nonzero(as_tuple=False)
 
-        # Vectorized w2 update: w2[r, c, :, action] += lr * reward * h
+        # Compute advantage using baseline (Optimization A: Policy Gradient Stability)
+        # This allows the network to distinguish between "good" and "better" actions
+        # even when all rewards are positive
+        current_mean = rewards.mean().item()
+        self.reward_baseline = 0.95 * self.reward_baseline + 0.05 * current_mean
+        advantages = rewards - self.reward_baseline  # [N]
+
+        # Vectorized w2 update: w2[r, c, :, action] += lr * advantage * h
         # Create one-hot action vectors [N, NUM_ACTIONS]
         action_onehot = F.one_hot(actions, NUM_ACTIONS).float()  # [N, A]
-        # delta_w2[n, h, a] = lr * reward[n] * hidden[n, h] * onehot[n, a]
-        delta_w2 = RL_LEARNING_RATE * rewards.view(-1, 1, 1) * hidden.unsqueeze(-1) * action_onehot.unsqueeze(1)
+        # delta_w2[n, h, a] = lr * advantage[n] * hidden[n, h] * onehot[n, a]
+        delta_w2 = RL_LEARNING_RATE * advantages.view(-1, 1, 1) * hidden.unsqueeze(-1) * action_onehot.unsqueeze(1)
 
         # Vectorized w1 update (simplified: update all neurons proportional to activation)
-        # delta_w1[n, i, h] = lr * 0.1 * reward[n] * input[n, i] * sign(h[n, h]) * (|h| > 0.1)
+        # delta_w1[n, i, h] = lr * 0.1 * advantage[n] * input[n, i] * sign(h[n, h]) * (|h| > 0.1)
         h_sign = torch.sign(hidden)  # [N, H]
         h_active = (hidden.abs() > 0.1).float()  # [N, H]
-        delta_w1 = RL_LEARNING_RATE * 0.1 * rewards.view(-1, 1, 1) * inputs.unsqueeze(-1) * (h_sign * h_active).unsqueeze(1)
+        delta_w1 = RL_LEARNING_RATE * 0.1 * advantages.view(-1, 1, 1) * inputs.unsqueeze(-1) * (h_sign * h_active).unsqueeze(1)
 
         # Apply updates
         if positions is not None:
@@ -1527,9 +1594,11 @@ class GPULifeGame:
             neighbor_alive = self.alive[neighbor_r, neighbor_c]
             neighbor_genome = self.genome[neighbor_r, neighbor_c]
 
-            # Check genome similarity to reference (only where neighbor is alive)
-            genome_dist = torch.norm(neighbor_genome - reference_genome, dim=-1)
-            is_similar = neighbor_alive & (genome_dist < MATE_GENOME_THRESHOLD)
+            # Check genome similarity using cosine similarity (Optimization B)
+            neighbor_chem = F.normalize(neighbor_genome[:, :, 8:12], dim=-1, eps=1e-8)  # [H, W, 4]
+            reference_chem = F.normalize(reference_genome[:, :, 8:12], dim=-1, eps=1e-8)  # [H, W, 4]
+            cosine_sim = (neighbor_chem * reference_chem).sum(dim=-1)  # [H, W]
+            is_similar = neighbor_alive & (cosine_sim > 0.8)
 
             # Count similar neighbors
             similar_neighbor_count += is_similar.int()
@@ -1630,8 +1699,16 @@ class GPULifeGame:
 
                         if not visited[ny, nx] and alive[ny, nx]:
                             neighbor_genome = genome[ny, nx]
-                            dist = np.linalg.norm(neighbor_genome - ref_genome)
-                            if dist < MATE_GENOME_THRESHOLD:
+                            # Use cosine similarity for genome comparison (Optimization B)
+                            ref_chem = ref_genome[8:12]
+                            neighbor_chem = neighbor_genome[8:12]
+                            ref_norm = np.linalg.norm(ref_chem)
+                            neighbor_norm = np.linalg.norm(neighbor_chem)
+                            if ref_norm > 1e-8 and neighbor_norm > 1e-8:
+                                cosine_sim = np.dot(ref_chem, neighbor_chem) / (ref_norm * neighbor_norm)
+                            else:
+                                cosine_sim = 0.0
+                            if cosine_sim > 0.8:
                                 visited[ny, nx] = True
                                 queue.append((ny, nx))
 
@@ -1764,12 +1841,18 @@ class GPULifeGame:
             sample_genomes = alive_genomes
             N_sample = N
 
-        # Build adjacency matrix
+        # Build adjacency matrix using cosine similarity (Optimization B)
         adjacency = np.zeros((N_sample, N_sample), dtype=bool)
+        # Extract chemical affinity (last 4 dims) and normalize
+        sample_chem = sample_genomes[:, 8:12]  # [N, 4]
+        sample_norms = np.linalg.norm(sample_chem, axis=1, keepdims=True)
+        sample_norms = np.maximum(sample_norms, 1e-8)  # Avoid division by zero
+        sample_chem_norm = sample_chem / sample_norms  # [N, 4]
+
         for i in range(N_sample):
             for j in range(i+1, N_sample):
-                dist = np.linalg.norm(sample_genomes[i] - sample_genomes[j])
-                if dist < MATE_GENOME_THRESHOLD:
+                cosine_sim = np.dot(sample_chem_norm[i], sample_chem_norm[j])
+                if cosine_sim > 0.8:
                     adjacency[i, j] = True
                     adjacency[j, i] = True
 
