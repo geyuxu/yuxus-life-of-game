@@ -82,8 +82,8 @@ class ABTestRunner:
                 'avg_repro': 0.0,
             }
 
-        # Calculate fitness
-        fitness = game._calculate_fitness()
+        # Calculate fitness (skip diversity for speed during A/B testing)
+        fitness = game._calculate_fitness(include_diversity=False)
         avg_fitness = fitness[game.alive].mean().item()
 
         # Calculate diversity (average pairwise distance)

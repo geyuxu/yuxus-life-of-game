@@ -601,15 +601,19 @@ class GPULifeGame:
         print(f"[CHECKPOINT] Population: {self.alive.sum().item()}")
         return True
 
-    def _calculate_fitness(self):
+    def _calculate_fitness(self, include_diversity: bool = False):
         """
         Calculate multi-objective fitness for all cells.
 
         Fitness components (configurable weights in config.py):
         1. Lifetime (survival ability)
         2. Reproduction count (evolutionary success)
-        3. Diversity bonus (genetic uniqueness - rewards rare genomes)
+        3. Diversity bonus (genetic uniqueness - rewards rare genomes) [EXPENSIVE - optional]
         4. Energy efficiency (resource management)
+
+        Args:
+            include_diversity: If True, calculate diversity bonus (O(N²) - slow!)
+                              If False, skip diversity for faster computation
 
         Returns:
             Tensor of fitness values for all cells
@@ -624,30 +628,40 @@ class GPULifeGame:
         reproduction_score = self.repro_count.float() * FITNESS_WEIGHT_REPRODUCTION
 
         # Component 3: Diversity bonus (reward for unique genomes)
-        # Calculate genome distances to all other alive cells
-        alive_mask = self.alive
+        # EXPENSIVE O(N²) operation - only compute when explicitly requested
         diversity_bonus = torch.zeros_like(self.lifetime, dtype=torch.float32)
 
-        if alive_mask.sum() > 1:  # Need at least 2 alive cells
-            # Get alive genomes
-            alive_genomes = self.genome[alive_mask]  # [N, 12]
-            alive_positions = alive_mask.nonzero(as_tuple=False)  # [N, 2]
+        if include_diversity:
+            alive_mask = self.alive
+            if alive_mask.sum() > 1:  # Need at least 2 alive cells
+                # Get alive genomes
+                alive_genomes = self.genome[alive_mask]  # [N, 12]
+                alive_positions = alive_mask.nonzero(as_tuple=False)  # [N, 2]
 
-            # For each alive cell, calculate average distance to other alive cells
-            for idx, pos in enumerate(alive_positions):
-                r, c = pos[0].item(), pos[1].item()
-                cell_genome = self.genome[r, c]  # [12]
+                # OPTIMIZATION: Only calculate for a sample to reduce O(N²) cost
+                n_alive = len(alive_positions)
+                n_sample = min(n_alive, 500)  # Limit to 500 cells max
 
-                # Calculate distances to all other alive cells
-                distances = torch.norm(alive_genomes - cell_genome.unsqueeze(0), dim=1)
-                # Exclude self (distance=0)
-                other_distances = distances[distances > 0]
+                if n_sample < n_alive:
+                    # Sample random subset
+                    sample_indices = torch.randperm(n_alive, device=DEVICE)[:n_sample]
+                    alive_positions = alive_positions[sample_indices]
 
-                if len(other_distances) > 0:
-                    # Average distance to others = diversity score
-                    # Higher distance = more unique = higher bonus
-                    avg_distance = other_distances.mean()
-                    diversity_bonus[r, c] = avg_distance * FITNESS_WEIGHT_DIVERSITY
+                # For each sampled cell, calculate average distance to other alive cells
+                for idx, pos in enumerate(alive_positions):
+                    r, c = pos[0].item(), pos[1].item()
+                    cell_genome = self.genome[r, c]  # [12]
+
+                    # Calculate distances to all other alive cells
+                    distances = torch.norm(alive_genomes - cell_genome.unsqueeze(0), dim=1)
+                    # Exclude self (distance=0)
+                    other_distances = distances[distances > 0]
+
+                    if len(other_distances) > 0:
+                        # Average distance to others = diversity score
+                        # Higher distance = more unique = higher bonus
+                        avg_distance = other_distances.mean()
+                        diversity_bonus[r, c] = avg_distance * FITNESS_WEIGHT_DIVERSITY
 
         # Component 4: Energy efficiency (normalized current energy)
         energy_score = self.energy / MAX_ENERGY * FITNESS_WEIGHT_ENERGY
@@ -663,8 +677,9 @@ class GPULifeGame:
         if not self.alive.any():
             return
 
-        # Calculate multi-objective fitness
-        fitness = self._calculate_fitness()
+        # Calculate multi-objective fitness with diversity bonus
+        # This is only called occasionally (when saving), so the O(N²) cost is acceptable
+        fitness = self._calculate_fitness(include_diversity=True)
 
         max_fitness = fitness.max().item()
         if max_fitness > self.best_fitness:
@@ -1030,8 +1045,8 @@ class GPULifeGame:
         self.history['population'].append(total)
 
         if total > 0:
-            # Track average fitness
-            fitness = self._calculate_fitness()
+            # Track average fitness (skip diversity for speed - it's O(N²))
+            fitness = self._calculate_fitness(include_diversity=False)
             avg_fitness = fitness[self.alive].mean().item()
             self.history['avg_fitness'].append(avg_fitness)
 
