@@ -427,6 +427,9 @@ class GPULifeGame:
             'generation': []
         }
 
+        # Initialize history with generation 0 stats
+        self._update_history_stats()
+
     # -------------------------------------------------------------------------
     # Weight Persistence
     # -------------------------------------------------------------------------
@@ -1031,8 +1034,9 @@ class GPULifeGame:
 
         self.generation += 1
 
-        # Statistics tracking for evolution curves
-        self._update_history_stats()
+        # Statistics tracking for evolution curves (only update periodically for performance)
+        if self.generation % HISTORY_UPDATE_INTERVAL == 0:
+            self._update_history_stats()
 
     def _update_history_stats(self):
         """Update evolution history with current generation statistics."""
