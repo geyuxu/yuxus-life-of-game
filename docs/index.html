@@ -34,8 +34,6 @@
             --accent-red: #f85149;
             --border-color: #30363d;
             --gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            --gradient-2: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            --gradient-3: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
         }
 
         * {
@@ -54,6 +52,45 @@
             color: var(--text-primary);
             line-height: 1.6;
             overflow-x: hidden;
+        }
+
+        /* GitHub Ribbon */
+        .github-ribbon {
+            position: fixed;
+            top: 0;
+            right: 0;
+            z-index: 1000;
+        }
+
+        .github-ribbon a {
+            display: block;
+            width: 150px;
+            height: 150px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .github-ribbon a span {
+            position: absolute;
+            display: block;
+            width: 225px;
+            padding: 8px 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            text-align: center;
+            text-decoration: none;
+            transform: rotate(45deg);
+            top: 45px;
+            right: -55px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            transition: all 0.3s ease;
+        }
+
+        .github-ribbon a:hover span {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.5);
         }
 
         /* Animated background */
@@ -127,80 +164,6 @@
             font-weight: 300;
         }
 
-        .cta-buttons {
-            display: flex;
-            justify-content: center;
-            gap: 16px;
-            flex-wrap: wrap;
-            margin-bottom: 48px;
-        }
-
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-weight: 500;
-            text-decoration: none;
-            transition: all 0.2s ease;
-            font-size: 14px;
-        }
-
-        .btn-primary {
-            background: var(--gradient-1);
-            color: white;
-            border: none;
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
-        }
-
-        .btn-secondary {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-        }
-
-        .btn-secondary:hover {
-            background: var(--bg-secondary);
-            border-color: var(--accent-blue);
-        }
-
-        /* Demo Section */
-        .demo-section {
-            margin-bottom: 80px;
-        }
-
-        .demo-container {
-            position: relative;
-            border-radius: 16px;
-            overflow: hidden;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            border: 1px solid var(--border-color);
-        }
-
-        .demo-container img {
-            width: 100%;
-            display: block;
-        }
-
-        .demo-overlay {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            padding: 24px;
-            background: linear-gradient(transparent, rgba(0,0,0,0.8));
-        }
-
-        .demo-caption {
-            color: var(--text-secondary);
-            font-size: 14px;
-        }
-
         /* Key Finding */
         .key-finding {
             background: linear-gradient(135deg, rgba(63, 185, 80, 0.1) 0%, rgba(88, 166, 255, 0.1) 100%);
@@ -230,9 +193,9 @@
             font-weight: 600;
         }
 
-        /* Features Grid */
-        .section {
-            padding: 80px 0;
+        /* Video Section */
+        .video-section {
+            padding: 60px 0;
         }
 
         .section-title {
@@ -242,151 +205,104 @@
             text-align: center;
         }
 
-        .features-grid {
+        .video-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 24px;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 32px;
         }
 
-        .feature-card {
+        .video-card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 28px;
+            border-radius: 16px;
+            overflow: hidden;
             transition: all 0.3s ease;
         }
 
-        .feature-card:hover {
+        .video-card:hover {
             transform: translateY(-4px);
             border-color: var(--accent-purple);
             box-shadow: 0 12px 40px rgba(163, 113, 247, 0.1);
         }
 
-        .feature-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            margin-bottom: 16px;
-        }
-
-        .feature-icon.gpu { background: linear-gradient(135deg, #3fb950 0%, #238636 100%); }
-        .feature-icon.brain { background: linear-gradient(135deg, #a371f7 0%, #8957e5 100%); }
-        .feature-icon.dna { background: linear-gradient(135deg, #58a6ff 0%, #1f6feb 100%); }
-        .feature-icon.eco { background: linear-gradient(135deg, #f0883e 0%, #d29922 100%); }
-
-        .feature-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-
-        .feature-desc {
-            color: var(--text-secondary);
-            font-size: 14px;
-        }
-
-        /* Tech Stack */
-        .tech-stack {
-            display: flex;
-            justify-content: center;
-            gap: 32px;
-            flex-wrap: wrap;
-            margin-top: 48px;
-        }
-
-        .tech-item {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .tech-logo {
-            width: 48px;
-            height: 48px;
-            border-radius: 10px;
-            background: var(--bg-tertiary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            border: 1px solid var(--border-color);
-        }
-
-        .tech-name {
-            font-size: 12px;
-            color: var(--text-secondary);
-        }
-
-        /* Quick Start */
-        .code-block {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
+        .video-wrapper {
+            position: relative;
+            padding-bottom: 56.25%;
+            height: 0;
             overflow: hidden;
-            margin: 24px 0;
         }
 
-        .code-header {
+        .video-wrapper iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .video-info {
+            padding: 20px;
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 12px 16px;
+            justify-content: space-between;
+        }
+
+        .video-platform {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .platform-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .platform-icon.youtube {
+            background: #ff0000;
+        }
+
+        .platform-icon.bilibili {
+            background: #00a1d6;
+        }
+
+        .platform-icon svg {
+            width: 18px;
+            height: 18px;
+            fill: white;
+        }
+
+        .platform-name {
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .video-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 8px;
             background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .code-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-        }
-        .code-dot.red { background: #f85149; }
-        .code-dot.yellow { background: #d29922; }
-        .code-dot.green { background: #3fb950; }
-
-        .code-content {
-            padding: 20px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 13px;
-            overflow-x: auto;
-        }
-
-        .code-content .comment { color: var(--text-muted); }
-        .code-content .command { color: var(--accent-green); }
-
-        /* Benchmark Table */
-        .benchmark-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 24px 0;
-            font-size: 14px;
-        }
-
-        .benchmark-table th,
-        .benchmark-table td {
-            padding: 16px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .benchmark-table th {
-            background: var(--bg-tertiary);
-            font-weight: 600;
             color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.2s ease;
         }
 
-        .benchmark-table tr:hover {
-            background: rgba(88, 166, 255, 0.05);
+        .video-link:hover {
+            background: var(--accent-blue);
+            color: white;
         }
 
-        .improvement {
-            color: var(--accent-green);
-            font-weight: 600;
+        .video-link svg {
+            width: 16px;
+            height: 16px;
         }
 
         /* Footer */
@@ -394,7 +310,7 @@
             padding: 48px 0;
             text-align: center;
             border-top: 1px solid var(--border-color);
-            margin-top: 80px;
+            margin-top: 40px;
         }
 
         .footer-links {
@@ -434,42 +350,32 @@
                 padding: 60px 0 40px;
             }
 
-            .section {
-                padding: 60px 0;
+            .video-grid {
+                grid-template-columns: 1fr;
             }
 
-            .cta-buttons {
+            .video-info {
                 flex-direction: column;
-                align-items: center;
+                gap: 16px;
+                align-items: flex-start;
             }
 
-            .btn {
-                width: 100%;
-                max-width: 280px;
-                justify-content: center;
+            .github-ribbon a span {
+                font-size: 11px;
+                padding: 6px 0;
             }
-        }
-
-        /* Scroll indicator animation */
-        @keyframes bounce {
-            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
-            40% { transform: translateY(-8px); }
-            60% { transform: translateY(-4px); }
-        }
-
-        .scroll-indicator {
-            position: absolute;
-            bottom: -40px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: var(--text-muted);
-            animation: bounce 2s infinite;
-            font-size: 24px;
         }
     </style>
 </head>
 <body>
     <div class="bg-animation"></div>
+
+    <!-- GitHub Ribbon -->
+    <div class="github-ribbon">
+        <a href="https://github.com/geyuxu/yuxus-life-of-game" target="_blank">
+            <span>Fork me on GitHub</span>
+        </a>
+    </div>
 
     <header>
         <div class="container">
@@ -483,210 +389,71 @@
             <h1>Yuxu's Game of Life</h1>
             <p class="subtitle">A GPU-Accelerated Artificial Life Simulation with Emergent Neural Evolution — extending Conway's Game of Life into a massively parallel neuroevolution ecosystem.</p>
 
-            <div class="cta-buttons">
-                <a href="https://github.com/geyuxu/yuxus-life-of-game" class="btn btn-primary">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                    View on GitHub
-                </a>
-                <a href="https://youtu.be/CeMnTrSrS8k" class="btn btn-secondary">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
-                    Watch Demo
-                </a>
-                <a href="https://yuxu.ge/blog/post.html?p=posts/2026/neuroevo-life" class="btn btn-secondary">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-                    Read Blog Post
-                </a>
+            <div class="key-finding">
+                <div class="key-finding-label">Key Finding</div>
+                <p class="key-finding-text">
+                    A trained "super-lineage" starting from just <span class="highlight">1% of the population</span> achieved
+                    <span class="highlight">100% ecosystem dominance</span> within ~5000 generations,
+                    demonstrating the compound advantage of hybrid RL-neuroevolution architectures.
+                </p>
             </div>
         </div>
     </header>
 
     <main>
-        <!-- Demo Section -->
-        <section class="demo-section">
+        <!-- Video Section -->
+        <section class="video-section">
             <div class="container">
-                <div class="demo-container">
-                    <img src="demo.gif" alt="Yuxu's Game of Life Simulation Demo" loading="lazy">
-                    <div class="demo-overlay">
-                        <p class="demo-caption">Real-time simulation with 10,000+ neural agents competing, reproducing, and evolving</p>
-                    </div>
-                </div>
+                <h2 class="section-title">Demo Videos</h2>
 
-                <div class="key-finding">
-                    <div class="key-finding-label">Key Finding</div>
-                    <p class="key-finding-text">
-                        A trained "super-lineage" starting from just <span class="highlight">1% of the population</span> achieved
-                        <span class="highlight">100% ecosystem dominance</span> within ~5000 generations,
-                        demonstrating the compound advantage of hybrid RL-neuroevolution architectures.
-                    </p>
-                </div>
-            </div>
-        </section>
-
-        <!-- Features Section -->
-        <section class="section">
-            <div class="container">
-                <h2 class="section-title">Key Features</h2>
-
-                <div class="features-grid">
-                    <div class="feature-card">
-                        <div class="feature-icon gpu">&#x26A1;</div>
-                        <h3 class="feature-title">Massive GPU Parallelization</h3>
-                        <p class="feature-desc">10,000+ simultaneous neural agents evaluated in parallel via PyTorch. Vectorized operations using torch.einsum for batched forward passes with pre-allocated tensor buffers.</p>
+                <div class="video-grid">
+                    <!-- YouTube -->
+                    <div class="video-card">
+                        <div class="video-wrapper">
+                            <iframe
+                                src="https://www.youtube.com/embed/CeMnTrSrS8k"
+                                title="Yuxu's Game of Life - YouTube"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                allowfullscreen>
+                            </iframe>
+                        </div>
+                        <div class="video-info">
+                            <div class="video-platform">
+                                <div class="platform-icon youtube">
+                                    <svg viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                                </div>
+                                <span class="platform-name">YouTube</span>
+                            </div>
+                            <a href="https://youtu.be/CeMnTrSrS8k?feature=shared" target="_blank" class="video-link">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                                Watch on YouTube
+                            </a>
+                        </div>
                     </div>
 
-                    <div class="feature-card">
-                        <div class="feature-icon brain">&#x1F9E0;</div>
-                        <h3 class="feature-title">Hybrid Evolution Architecture</h3>
-                        <p class="feature-desc">Combines within-lifetime reinforcement learning (policy gradient) with cross-generational neuroevolution (sexual reproduction with crossover and mutation).</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon dna">&#x1F9EC;</div>
-                        <h3 class="feature-title">12-Dimensional Genomic Identity</h3>
-                        <p class="feature-desc">8D neural fingerprint (genotype) + 4D chemical affinity (phenotype). Cosine similarity-based compatibility enables emergent speciation.</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon eco">&#x1F33F;</div>
-                        <h3 class="feature-title">Emergent Ecological Dynamics</h3>
-                        <p class="feature-desc">No predefined species — clusters emerge naturally from genome similarity. 4-chemical signaling system with diffusion and decay creates rich ecological interactions.</p>
-                    </div>
-                </div>
-
-                <div class="tech-stack">
-                    <div class="tech-item">
-                        <div class="tech-logo">&#x1F40D;</div>
-                        <span class="tech-name">Python</span>
-                    </div>
-                    <div class="tech-item">
-                        <div class="tech-logo">&#x1F525;</div>
-                        <span class="tech-name">PyTorch</span>
-                    </div>
-                    <div class="tech-item">
-                        <div class="tech-logo">&#x1F3AE;</div>
-                        <span class="tech-name">Pygame</span>
-                    </div>
-                    <div class="tech-item">
-                        <div class="tech-logo">&#x1F4CA;</div>
-                        <span class="tech-name">NumPy</span>
-                    </div>
-                    <div class="tech-item">
-                        <div class="tech-logo">&#x1F680;</div>
-                        <span class="tech-name">CUDA/MPS</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Quick Start Section -->
-        <section class="section" style="background: var(--bg-secondary);">
-            <div class="container">
-                <h2 class="section-title">Quick Start</h2>
-
-                <div class="code-block">
-                    <div class="code-header">
-                        <span class="code-dot red"></span>
-                        <span class="code-dot yellow"></span>
-                        <span class="code-dot green"></span>
-                        <span style="margin-left: auto; color: var(--text-muted); font-size: 12px;">Terminal</span>
-                    </div>
-                    <div class="code-content">
-<span class="comment"># Clone the repository</span>
-<span class="command">git clone https://github.com/geyuxu/yuxus-life-of-game.git</span>
-<span class="command">cd yuxus-life-of-game</span>
-
-<span class="comment"># Create virtual environment</span>
-<span class="command">python -m venv .venv</span>
-<span class="command">source .venv/bin/activate</span>
-
-<span class="comment"># Install dependencies</span>
-<span class="command">pip install -r requirements.txt</span>
-
-<span class="comment"># Launch simulation (auto-detects GPU: CUDA > MPS > CPU)</span>
-<span class="command">python main.py</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Performance Section -->
-        <section class="section">
-            <div class="container">
-                <h2 class="section-title">Performance Benchmarks</h2>
-
-                <div class="code-block">
-                    <table class="benchmark-table">
-                        <thead>
-                            <tr>
-                                <th>Metric</th>
-                                <th>Before Optimization</th>
-                                <th>After Optimization</th>
-                                <th>Improvement</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Step Time</td>
-                                <td>180ms</td>
-                                <td>40ms</td>
-                                <td class="improvement">4.5x faster</td>
-                            </tr>
-                            <tr>
-                                <td>FPS</td>
-                                <td>10</td>
-                                <td>50+</td>
-                                <td class="improvement">5x faster</td>
-                            </tr>
-                            <tr>
-                                <td>GPU Memory</td>
-                                <td>Dynamic</td>
-                                <td>Pre-allocated</td>
-                                <td class="improvement">Stable</td>
-                            </tr>
-                            <tr>
-                                <td>Population Cap</td>
-                                <td>5,000</td>
-                                <td>10,000+</td>
-                                <td class="improvement">2x capacity</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <p style="text-align: center; color: var(--text-muted); margin-top: 16px; font-size: 14px;">
-                    Tested on NVIDIA RTX 3080 / Apple M1 Pro
-                </p>
-            </div>
-        </section>
-
-        <!-- Controls Section -->
-        <section class="section" style="background: var(--bg-secondary);">
-            <div class="container">
-                <h2 class="section-title">Controls</h2>
-
-                <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-                    <div class="feature-card">
-                        <h3 class="feature-title" style="font-family: 'JetBrains Mono', monospace;">SPACE</h3>
-                        <p class="feature-desc">Pause/Resume simulation</p>
-                    </div>
-                    <div class="feature-card">
-                        <h3 class="feature-title" style="font-family: 'JetBrains Mono', monospace;">R</h3>
-                        <p class="feature-desc">Reset simulation</p>
-                    </div>
-                    <div class="feature-card">
-                        <h3 class="feature-title" style="font-family: 'JetBrains Mono', monospace;">C</h3>
-                        <p class="feature-desc">Toggle chemical overlay</p>
-                    </div>
-                    <div class="feature-card">
-                        <h3 class="feature-title" style="font-family: 'JetBrains Mono', monospace;">H</h3>
-                        <p class="feature-desc">Toggle genome heatmap</p>
-                    </div>
-                    <div class="feature-card">
-                        <h3 class="feature-title" style="font-family: 'JetBrains Mono', monospace;">Scroll</h3>
-                        <p class="feature-desc">Zoom in/out</p>
-                    </div>
-                    <div class="feature-card">
-                        <h3 class="feature-title" style="font-family: 'JetBrains Mono', monospace;">Drag</h3>
-                        <p class="feature-desc">Pan camera</p>
+                    <!-- Bilibili -->
+                    <div class="video-card">
+                        <div class="video-wrapper">
+                            <iframe
+                                src="//player.bilibili.com/player.html?isOutside=true&bvid=BV1XRKFYrEHr&autoplay=0"
+                                title="Yuxu's Game of Life - Bilibili"
+                                scrolling="no"
+                                frameborder="no"
+                                allowfullscreen="true">
+                            </iframe>
+                        </div>
+                        <div class="video-info">
+                            <div class="video-platform">
+                                <div class="platform-icon bilibili">
+                                    <svg viewBox="0 0 24 24"><path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.659.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373z"/></svg>
+                                </div>
+                                <span class="platform-name">Bilibili</span>
+                            </div>
+                            <a href="https://b23.tv/yFEUA00" target="_blank" class="video-link">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                                Watch on Bilibili
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -697,8 +464,8 @@
         <div class="container">
             <div class="footer-links">
                 <a href="https://github.com/geyuxu/yuxus-life-of-game">GitHub</a>
-                <a href="https://youtu.be/CeMnTrSrS8k">YouTube Demo</a>
-                <a href="https://yuxu.ge/blog/post.html?p=posts/2026/neuroevo-life">Blog Post</a>
+                <a href="https://youtu.be/CeMnTrSrS8k">YouTube</a>
+                <a href="https://b23.tv/yFEUA00">Bilibili</a>
                 <a href="https://doi.org/10.5281/zenodo.18397035">Zenodo DOI</a>
             </div>
 
@@ -706,7 +473,6 @@
 
             <p class="footer-credits">
                 Built with PyTorch | Accelerated by CUDA/MPS | Inspired by Conway<br>
-                Developed as part of MSc in Artificial Intelligence at University of York<br>
                 &copy; 2025 Yuxu Ge | MIT License
             </p>
         </div>
